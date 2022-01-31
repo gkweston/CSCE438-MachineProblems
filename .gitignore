@@ -1,8 +1,12 @@
 # cpp and c compilation files
 *.o
 
-# test files
+# test and dev files
 /MP1/normal_test_cases.xlsx
+/MP1/notes.txt
+/MP1/scratch.cpp
+/MP1/tclient
+/MP1/tserver
 
 # OS files
 .DS_Store
