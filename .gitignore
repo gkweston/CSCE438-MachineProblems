@@ -3,3 +3,6 @@
 
 # test files
 /MP1/normal_test_cases.xlsx
+
+# OS files
+.DS_Store
