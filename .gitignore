@@ -1,0 +1,5 @@
+# cpp and c compilation files
+*.o
+
+# test files
+/MP1/normal_test_cases.xlsx
