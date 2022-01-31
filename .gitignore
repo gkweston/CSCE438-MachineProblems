@@ -1,4 +1,5 @@
 # cpp and c compilation files
+*.out
 *.o
 
 # test and dev files
