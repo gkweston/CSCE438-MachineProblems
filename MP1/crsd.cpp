@@ -1,5 +1,5 @@
 #include <sys/socket.h>
-#include <strings.h>
+#include <string.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <string>
