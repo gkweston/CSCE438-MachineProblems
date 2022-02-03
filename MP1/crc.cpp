@@ -251,7 +251,7 @@ struct Reply process_command(const int sockfd, char* command)
 }
 
 void* server_response_handler(void* _sock) {
-
+	
 	int sock = *(int*)_sock;
 	char buf[MAX_DATA];
 	int size_recv;

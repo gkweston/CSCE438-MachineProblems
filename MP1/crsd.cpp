@@ -33,6 +33,7 @@ public:
     string name;
     vector<u8> client_UIDs;     // We enforce <256 members so a u8 is large enough
     vector<int> client_socks;
+    pthread_mutex_t client_lock;
 
     room(string _name, int _port) {
         name = _name;
@@ -42,10 +43,14 @@ public:
     
     void add_client(int client_sock, u8 client_uid) {
         // Add to client_socks, client_UIDs, return UID
+        pthread_mutex_lock(&client_lock);
+
         ++n_members;
         sock = client_sock;
         client_socks.push_back(client_sock);
         client_UIDs.push_back(client_uid);
+        
+        pthread_mutex_unlock(&client_lock);
     }
 
     char get_next_uid() {
