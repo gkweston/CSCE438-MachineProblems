@@ -1,7 +1,10 @@
-test: test_server test_client
+all: server client
 
-test_server: crsd.cpp
-	g++ crsd.cpp -o tserver
+server: crsd.cpp interface.h
+	g++ crsd.cpp -o server -O1 -pthread
 
-test_client: crc.cpp
-	g++ crc.cpp -o tclient
+client: crc.cpp interface.h
+	g++ crc.cpp -o client -O1 -pthread
+
+clean:
+	rm server client *.o

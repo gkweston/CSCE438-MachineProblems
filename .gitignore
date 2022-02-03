@@ -8,6 +8,8 @@
 /MP1/scratch.cpp
 /MP1/tclient
 /MP1/tserver
+/reMP1/
+/reMP1/*
 
 # OS files
 .DS_Store

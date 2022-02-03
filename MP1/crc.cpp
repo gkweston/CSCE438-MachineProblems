@@ -1,9 +1,3 @@
-/*
-Notes:
-- 1st msg sent will be a comman msg, LIST, JOIN, ...
-- All other msg will be char*
-*/
-
 #include <netdb.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -26,12 +20,17 @@ using namespace std;
 #define JOIN	('\x03')
 #define LIST	('\x04')
 
-/*
- * TODO: IMPLEMENT BELOW THREE FUNCTIONS
- */
+/* Types */
+typedef uint8_t u8;
+typedef uint32_t u32;
+
+/* Forwards */
 int connect_to(const char *host, const int port);
 struct Reply process_command(const int sockfd, char* command);
 void process_chatmode(const char* host, const int port);
+
+/* Globals */
+u8 GLOBAL_UID;	// assigned by the server after a JOIN command
 
 int main(int argc, char** argv) 
 {
@@ -55,7 +54,7 @@ int main(int argc, char** argv)
 		display_reply(command, reply);
 		
 		touppercase(command, strlen(command) - 1);
-		if (strncmp(command, "JOIN", 4) == 0) {
+		if (strncmp(command, "JOIN", 4) == 0 && reply.status == SUCCESS) {
 			printf("Now you are in the chatmode\n");
 			process_chatmode(argv[1], reply.port);
 		}
@@ -76,55 +75,67 @@ int main(int argc, char** argv)
  */
 int connect_to(const char *host, const int port)
 {
-	// ------------------------------------------------------------
-	// GUIDE :
-	// In this function, you are suppose to connect to the server.
-	// After connection is established, you are ready to send or
-	// receive the message to/from the server.
-	// 
-	// Finally, you should return the socket fildescriptor
-	// so that other functions such as "process_command" can use it
-	// ------------------------------------------------------------
-
 	int sock;
 	struct sockaddr_in server;
 
 	// Create TCP socket
 	sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (sock == -1) {
-		printf("Failed on socket init\n");
+		perror("Failed on socket init\n");
 	}
-	printf("Socket init success\n");
 
 	// Set up server info
-	// server.sin_addr.s_addr = inet_addr("127.0.0.1");
-	server.sin_addr.s_addr = inet_addr(host); //(!)
+	server.sin_addr.s_addr = inet_addr(host);
 	server.sin_family = AF_INET;
 	server.sin_port = htons(port);
 
 	// Issue connect, propogate error upwards w/ -1
 	if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0) {
-		printf("Failed on connect\n");
+		perror("Failed on connect\n");
 		return -1;
 	}
-	printf("Connect success\n");
 
 	return sock;
 }
 
+int space_idx(char* buf) {
+	// get the index of our strtok delimiter ' '
+	for (int i = 0; i < strlen(buf) - 1; i++) {
+		if (buf[i] == ' ') {
+			return i;
+		}
+	}
+	return -1;
+}
+
 char set_command_buf(char* buf, char* command) {
 	/*
-	Command buffer is { 1B command | NB Parameter}
+	Command buffer is {1B command||NB Parameter}
 	populate this buffer, then return the current
 	command so we can reference it in the resp
 	*/
-	
+
+	/*
+		For all except LIST check if user input
+		"COMMAND" or "COMMAND " which would result
+		in segfault by way of strtok
+	*/
+	if (strncmp(command, "LIST", 4) != 0) {
+		int idx = space_idx(command);
+		int c_len = strlen(command);
+		if (idx == -1 || idx == (c_len - 1)) {
+			cout << "CREATE, DELETE, JOIN must take a parameter\n";
+			get_command(command, MAX_DATA);
+			return set_command_buf(buf, command);
+		}
+	}
+
 	// Get command type
 	char* cmd = strtok(command, " ");
 	char* name;
 	char cmd_code;
 	int len;
-	
+
 	if (strncmp(cmd, "CREATE", 6) == 0) {
 		cmd_code = CREATE;
 	} else if (strncmp(cmd, "DELETE", 6) == 0) {
@@ -148,11 +159,9 @@ char set_command_buf(char* buf, char* command) {
 	len = strlen(name);
 	memcpy(buf + 1, name, len);
 	buf[len + 1] = '\0';
-	
+		
 	return cmd_code;
 }
-
-typedef uint32_t u32;
 
 void bytearray_to_int(int* i, char* ba) {
 	// Verify this call on C9, else bitshift the value (*)(!)
@@ -170,24 +179,6 @@ void bytearray_to_int(int* i, char* ba) {
  */
 struct Reply process_command(const int sockfd, char* command)
 {
-	// ------------------------------------------------------------
-	// GUIDE 1:
-	// In this function, you are supposed to parse a given command
-	// and create your own message in order to communicate with
-	// the server. Surely, you can use the input command without
-	// any changes if your server understand it. The given command
-    // will be one of the followings:
-	//
-	// CREATE <name>
-	// DELETE <name>
-	// JOIN <name>
-    // LIST
-	//
-	// -  "<name>" is a chatroom name that you want to create, delete,
-	// or join.
-	// 
-	// - CREATE/DELETE/JOIN and "<name>" are separated by one space.
-	// ------------------------------------------------------------
 	char cmd_buf[MAX_DATA];
 	char cmd;
 	
@@ -196,18 +187,13 @@ struct Reply process_command(const int sockfd, char* command)
 		exit(1);
 	}
 
-	// ------------------------------------------------------------
-	// GUIDE 2:
-	// After you create the message, you need to send it to the
-	// server and receive a result from the server.
-	// ------------------------------------------------------------
-	
-	// Send
-	if (send(sockfd, cmd_buf, strlen(cmd_buf), 0) < 0) {
+	// * Send
+	if (send(sockfd, cmd_buf, strlen(cmd_buf) + 1, 0) < 0) {
 		printf("Failed on send\n");
 		return (struct Reply) { FAILURE_UNKNOWN, };
 	}
-	// Recv
+
+	// * Recv
 	int recv_size;
 	char reply_buf[MAX_DATA];
 	if ((recv_size = recv(sockfd, reply_buf, MAX_DATA, 0)) < 0) {
@@ -215,97 +201,71 @@ struct Reply process_command(const int sockfd, char* command)
 		return (struct Reply) { FAILURE_UNKNOWN, };
 	}
 
-	cout << "Send & recv successful\n"; //(!)
-
-	// ------------------------------------------------------------
-	// GUIDE 3:
-	// Then, you should create a variable of Reply structure
-	// provided by the interface and initialize it according to
-	// the result.
-	//
-	// For example, if a given command is "JOIN room1"
-	// and the server successfully created the chatroom,
-	// the server will reply a message including information about
-	// success/failure, the number of members and port number.
-	// By using this information, you should set the Reply variable.
-	// the variable will be set as following:
-	//
-	// Reply reply;
-	// reply.status = SUCCESS;
-	// reply.num_member = number;
-	// reply.port = port;
-	// 
-	// "number" and "port" variables are just an integer variable
-	// and can be initialized using the message fomr the server.
-	//
-	// For another example, if a given command is "CREATE room1"
-	// and the server failed to create the chatroom becuase it
-	// already exists, the Reply varible will be set as following:
-	//
-	// Reply reply;
-	// reply.status = FAILURE_ALREADY_EXISTS;
-    // 
-    // For the "LIST" command,
-    // You are suppose to copy the list of chatroom to the list_room
-    // variable. Each room name should be seperated by comma ','.
-    // For example, if given command is "LIST", the Reply variable
-    // will be set as following.
-    //
-    // Reply reply;
-    // reply.status = SUCCESS;
-    // strcpy(reply.list_room, list);
-    // 
-    // "list" is a string that contains a list of chat rooms such 
-    // as "r1,r2,r3,"
-	// ------------------------------------------------------------
-
-	// Notes:
-	/* #define CREATE 	('\x01')
-		-> Return result to user
-	   #define DELETE 	('\x02')
-	   	-> Return result, with a warning to chatroom users
-	   #define JOIN		('\x03')
-	   	-> Return result, num_members, port
-	   #define LIST		('\x04')
-	   	-> Return result, buf of LIST
-		-> Expect LIST is nullterm   */
-
+	// Enum key:
 	// SUCCESS					=\x00
     // FAILURE_ALREADY_EXISTS	=\x01
     // FAILURE_NOT_EXISTS		=\x02
     // FAILURE_INVALID			=\x03
     // FAILURE_UNKNOWN			=\x04
 	
-	// Expect packet = { 1B STATUS | <=256B MSG }
+	// Expect packet = {1B STATUS||<=255B MSG }
 	struct Reply repl;
 	repl.status = (enum Status)reply_buf[0];
 
-	if (cmd == CREATE && repl.status == SUCCESS) {
-		// Expect packet = { 1B Status }
-		printf("Room created!\n");
-	} else if (cmd == DELETE && repl.status == SUCCESS) {
-		// Expect packet = { 1B Status | <256B Warning }
-		printf("%s", reply_buf + 1);
-	} else if (cmd == JOIN) {
-		// Expect packet = { 1B Status | 4B N Members | 4B Port }
-		// 4B integers are serialized network byteorder (Big-Endian)
-		
-		// Place parameters in ints, network byte order (!) test on C9 (*)
-		int n_members_nb, port_nb;
-		bytearray_to_int(&n_members_nb, reply_buf + 1);
-		bytearray_to_int(&port_nb, reply_buf + 5);
+	// Return error
+	if (repl.status != SUCCESS) 
+		return repl;
 
-		repl.num_member = (int) ntohl((u32) n_members_nb);
-		repl.port = (int) ntohl((u32) port_nb);
+	// Parse responses into repl struct
+	switch (cmd) {
+		case CREATE:
+			break;
 
-		cout << "Join num_member: " << repl.num_member << '\n';
-		cout << "Join port: " << repl.port << '\n';
+		case DELETE:
+			printf("%s", reply_buf + 1);
+			break;
 
-	} else if (cmd == LIST) {
-		strcpy(repl.list_room, reply_buf+1);
-	} else printf("Failure, unknown command recv'd\n");
-	
+		case JOIN:
+			// Expect packet = {1B STATUS||1B UID||4B N_MEMBER||4B PORT}
+			// 4B integers are serialized network byteorder (Big-Endian)
+			
+			// Extract & place parameters in ints, network byte order (!) test on C9 (*)
+			GLOBAL_UID = *(reply_buf + 1);
+			int n_members_nb, port_nb;
+			bytearray_to_int(&n_members_nb, reply_buf + 2);
+			bytearray_to_int(&port_nb, reply_buf + 6);
+
+			repl.num_member = (int) ntohl((u32) n_members_nb);
+			repl.port = (int) ntohl((u32) port_nb);
+			break;
+
+		case LIST:
+			strcpy(repl.list_room, reply_buf+1);
+			break;
+
+		default:
+			printf("Failure, unknown command recv'd\n");
+	}
+
 	return repl;
+}
+
+void* server_response_handler(void* _sock) {
+
+	int sock = *(int*)_sock;
+	char buf[MAX_DATA];
+	int size_recv;
+
+	while ((size_recv = recv(sock, buf, MAX_DATA, 0)) > 0) {
+		buf[size_recv] = '\0';
+		if (buf[0]) {
+			display_message(buf);
+		}
+		cout << '\n';
+	}
+	cout << "Server disco!\n";
+
+	return 0;
 }
 
 /* 
@@ -317,66 +277,40 @@ struct Reply process_command(const int sockfd, char* command)
 void process_chatmode(const char* host, const int port)
 {
 
-	/* In this debug step, wait for response before taking more input (!) */
-
-	// ------------------------------------------------------------
-	// GUIDE 1:
-	// In order to join the chatroom, you are supposed to connect
-	// to the server using host and port.
-	// You may re-use the function "connect_to".
-	// ------------------------------------------------------------
-	cout << "Chatroom client issuing connection\n";
 	int chat_sockfd = connect_to(host, port);
 
-	// ------------------------------------------------------------
-	// GUIDE 2:
-	// Once the client have been connected to the server, we need
-	// to get a message from the user and send it to server.
-	// At the same time, the client should wait for a message from
-	// the server.
-	// ------------------------------------------------------------
-	// debug step (!)
-	// char msgbuf[MAX_DATA];
-	// get_message(msgbuf, MAX_DATA);
+	// * send uid to the server so it can sync
+	char uid_send = (char)GLOBAL_UID;
+	if (send(chat_sockfd, &GLOBAL_UID, 1, 0) < 0) {
+		perror("UID send failure");
+	}
+
+	char user_in[MAX_DATA - 1];
 	char msg[MAX_DATA];
 	char resp[MAX_DATA];
 	int recv_size;
 
-	while(true) {
-		/* MULTIPLEX between these two (!)(!)(*)(*)*/
-		// Get message from client
-		printf("$ ");
-		get_message(msg, MAX_DATA);
+	pthread_t s_thread;
+	pthread_create(&s_thread, NULL, server_response_handler, &chat_sockfd);
 
-		// Send on sock
+	while(true) {
+		// * Get message from client
+		get_message(user_in, MAX_DATA);
+		
+		// * Prepend UID to chat message = {1B UID||NB PAYLOAD}
+		msg[0] = (char) GLOBAL_UID;
+		strcpy(msg + 1, user_in);
+
+		// * Send on sock
 		if (send(chat_sockfd, msg, MAX_DATA, 0) < 0) {
 			puts("Failure on send");
 			exit(1);
 		}
 
-		// Wait for reply from server (!) dbg
-		if ((recv_size = recv(chat_sockfd, resp, MAX_DATA, 0)) < 0) {
-			puts("Failure on recv");
-			exit(1);
-		}
 		display_message(resp);
 		cout << '\n';
 		bzero(resp, strlen(resp));
 	}
-	
-    // ------------------------------------------------------------
-    // IMPORTANT NOTICE:
-    // 1. To get a message from a user, you should use a function
-    // "void get_message(char*, int);" in the interface.h file
-    // 
-    // 2. To print the messages from other members, you should use
-    // the function "void display_message(char*)" in the interface.h
-    //
-    // 3. Once a user entered to one of chatrooms, there is no way
-    //    to command mode where the user  enter other commands
-    //    such as CREATE,DELETE,LIST.
-    //    Don't have to worry about this situation, and you can 
-    //    terminate the client program by pressing CTRL-C (SIGINT)
-	// ------------------------------------------------------------
+
 }
 
