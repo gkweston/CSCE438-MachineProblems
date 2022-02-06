@@ -1,6 +1,7 @@
 # cpp and c compilation files
 *.out
 *.o
+*.zip
 
 # test and dev files
 /MP1/normal_test_cases.xlsx
@@ -8,8 +9,7 @@
 /MP1/scratch.cpp
 /MP1/tclient
 /MP1/tserver
-/reMP1/
-/reMP1/*
+/MP1/MP1_GarrettWeston.zip
 
 # OS files
 .DS_Store
