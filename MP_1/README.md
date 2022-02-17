@@ -32,6 +32,7 @@ I might seek to add these features, personal time allowing:
 
 2. Clients are provisioned with a client-server key. Sever generates a new chatroom secret when users create a new encrypted room. Compare a hash of the chatroom password (as above) when clients join. Distribute the chatroom secret to clients encrypted with client-server key. Relies on the server being securely coded and unaccessible, along with client keys being safe in memory and safely provisioned. Neither of these should necessarily be assumed, but should be possible.
 
+**Efficient UID generation**: Currently, there is a UID exchange between client and server which allows us to limit the UID size to 1 byte. A more efficient UID for a scalable system would be to instantiate 32 or 64 byte UIDs randomly by the client and circumvent this exchange. However, we would then be sending 32-64 more bytes on the wire for each message, which is unnecessary for this version.
 
 ## Other
 Check out the design doc for a very high-level overview of how it currently works. For more granular details, reference documentation in code. Cheers!
