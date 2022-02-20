@@ -3,15 +3,32 @@
 #include <unistd.h>
 #include <grpc++/grpc++.h>
 #include "client.h"
+#include "sns.grpc.pb.h"
+
+using csce438::SNSService;
+using csce438::Reply;
+using csce438::Request;
+using csce438::Message;
+using grpc::Status;
+using grpc::ClientContext;
 
 class Client : public IClient
 {
+    
     public:
         Client(const std::string& hname,
                const std::string& uname,
-               const std::string& p)
-            :hostname(hname), username(uname), port(p)
-            {}
+               const std::string& p) : 
+               hostname(hname), username(uname), port(p),
+               stub_(
+                    csce438::SNSService::NewStub(
+                        grpc::CreateChannel(
+                            hostname + ":" + port,
+                            grpc::InsecureChannelCredentials()
+                        )
+                    ) 
+                ) { }
+               
     protected:
         virtual int connectTo();
         virtual IReply processCommand(std::string& input);
@@ -23,8 +40,43 @@ class Client : public IClient
         
         // You can have an instance of the client stub
         // as a member variable.
-        //std::unique_ptr<NameOfYourStubClass::Stub> stub_;
+        // std::unique_ptr<NameOfYourStubClass::Stub> stub_;
+        std::unique_ptr<csce438::SNSService::Stub> stub_;
+        //(!)int issueLogin(const Request& req, Reply* rep);
 };
+/*(!)int Client::issueLogin(const Request& req, Reply* repl) {
+    ClientContext ctx;
+    Status status = stub_->Login(&ctx, req, repl);
+    
+    if (!status.ok()) {
+        std::cout << "rpc Login failed\n";
+        return 0;
+    }
+    return 1;
+}*/
+
+int Client::connectTo() {
+    
+    // * Issue a Login command to the server to give our username
+    // 1 init a request with the given uname
+    Request req;
+    req.set_username(username);
+    
+    // 2. pass: Context, request obj, response obj
+    grpc::ClientContext ctx;
+    Reply repl;
+    grpc::Status status = stub_->Login(&ctx, req, &repl);
+    
+    // * Check the status returned on the RPC
+    if (!status.ok()) {
+        std::cout << "(!) rpc:Login failed due to:" << '\n';
+        std::cout << "(!) "<< status.error_code() << ' ' << status.error_message() << '\n';
+        return 0;
+    }
+    std::cout << "(!) rpc:Login success\n";//(!)
+    std:: cout << "(!) reply.msg: " << repl.msg() << '\n';
+    return 1;
+}
 
 int main(int argc, char** argv) {
 
@@ -35,11 +87,14 @@ int main(int argc, char** argv) {
     while ((opt = getopt(argc, argv, "h:u:p:")) != -1){
         switch(opt) {
             case 'h':
-                hostname = optarg;break;
+                hostname = optarg; 
+                break;
             case 'u':
-                username = optarg;break;
+                username = optarg;
+                break;
             case 'p':
-                port = optarg;break;
+                port = optarg;
+                break;
             default:
                 std::cerr << "Invalid Command Line Argument\n";
         }
@@ -51,7 +106,7 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-
+/*
 int Client::connectTo()
 {
 	// ------------------------------------------------------------
@@ -66,6 +121,7 @@ int Client::connectTo()
 
     return 1; // return 1 if success, otherwise return -1
 }
+*/
 
 IReply Client::processCommand(std::string& input)
 {

@@ -30,7 +30,9 @@ using csce438::SNSService;
 
 class SNSServiceImpl final : public SNSService::Service {
   
-  Status List(ServerContext* context, const Request* request, Reply* reply) override {
+  Status List(ServerContext* context,
+              const Request* request,
+              Reply* reply) override {
     // ------------------------------------------------------------
     // In this function, you are to write code that handles 
     // LIST request from the user. Ensure that both the fields
@@ -39,7 +41,9 @@ class SNSServiceImpl final : public SNSService::Service {
     return Status::OK;
   }
 
-  Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
+  Status Follow(ServerContext* context,
+                const Request* request,
+                Reply* reply) override {
     // ------------------------------------------------------------
     // In this function, you are to write code that handles 
     // request from a user to follow one of the existing
@@ -48,7 +52,9 @@ class SNSServiceImpl final : public SNSService::Service {
     return Status::OK; 
   }
 
-  Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
+  Status UnFollow(ServerContext* context,
+                  const Request* request,
+                  Reply* reply) override {
     // ------------------------------------------------------------
     // In this function, you are to write code that handles 
     // request from a user to unfollow one of his/her existing
@@ -57,16 +63,23 @@ class SNSServiceImpl final : public SNSService::Service {
     return Status::OK;
   }
   
-  Status Login(ServerContext* context, const Request* request, Reply* reply) override {
+  Status Login(ServerContext* context,
+               const Request* request,
+               Reply* reply) override {
     // ------------------------------------------------------------
     // In this function, you are to write code that handles 
     // a new user and verify if the username is available
     // or already taken
     // ------------------------------------------------------------
+    std::cout << "(!) rpc:Login recv\n";
+    std::string pre("ok, hello ");
+    reply->set_msg(pre + request->username());
+    
     return Status::OK;
   }
 
-  Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
+  Status Timeline(ServerContext* context,
+                  ServerReaderWriter<Message, Message>* stream) override {
     // ------------------------------------------------------------
     // In this function, you are to write code that handles 
     // receiving a message/post from a user, recording it in a file
@@ -83,6 +96,20 @@ void RunServer(std::string port_no) {
   // which would start the server, make it listen on a particular
   // port number.
   // ------------------------------------------------------------
+  //* Make init service and server builder
+  std::string addr = std::string("127.0.0.1:") + port_no;
+  SNSServiceImpl service;
+  ServerBuilder builder;
+  //* Listen on given address (insecure) and register service
+  builder.AddListeningPort(
+    addr,
+    grpc::InsecureServerCredentials()
+  );
+  builder.RegisterService(&service);
+  //* Assemble server
+  std::unique_ptr<Server> server(builder.BuildAndStart());
+  std::cout << "(!) service listening on " << addr << '\n';
+  server->Wait();//(!) never returns
 }
 
 int main(int argc, char** argv) {
