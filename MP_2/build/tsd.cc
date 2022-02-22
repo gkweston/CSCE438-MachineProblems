@@ -30,6 +30,18 @@ using csce438::Request;
 using csce438::Reply;
 using csce438::SNSService;
 
+/*
+user_table in memory version:
+
+struct user_entry {
+    string username
+    vector following_users
+}
+
+vector<user_entry> user_table
+
+*/
+
 class SNSServiceImpl final : public SNSService::Service {
   
   Status List(ServerContext* context,
@@ -40,6 +52,12 @@ class SNSServiceImpl final : public SNSService::Service {
     // LIST request from the user. Ensure that both the fields
     // all_users & following_users are populated
     // ------------------------------------------------------------
+    std::cout << "S| recvd LIST\n";//(!)
+
+    for (int i = 0; i < user_table.size(); i++) {
+        // reply->set_all_users(i, user_table[i].c_str());
+        reply->add_all_users(user_table[i].c_str());
+    }
     return Status::OK;
   }
 
@@ -51,6 +69,7 @@ class SNSServiceImpl final : public SNSService::Service {
     // request from a user to follow one of the existing
     // users
     // ------------------------------------------------------------
+    std::cout << "S| recvd Follow\n";//(!)
     return Status::OK; 
   }
 
@@ -62,6 +81,7 @@ class SNSServiceImpl final : public SNSService::Service {
     // request from a user to unfollow one of his/her existing
     // followers
     // ------------------------------------------------------------
+    std::cout << "S| recvd UnFollow\n";//(!)
     return Status::OK;
   }
   
@@ -74,15 +94,20 @@ class SNSServiceImpl final : public SNSService::Service {
     // or already taken
     // ------------------------------------------------------------
 
+    /*
+    IF we recv a user that's already in user_table, we simply overwrite
+    that user's entry with a fresh one (and/or set the following vec to
+    empyt)
+    */
 
-    std::cout << "(!) S| rpc:Login recv\n";
-    // * Check if uname already - handle this case...
+    std::cout << "S| recv Login\n";//(!)
+    // * Check if uname already - handle this case... (!)
     std::string uname = request->username();
     for (int i = 0; i < user_table.size(); i++) {
         if (user_table[i] == uname) {
             // reply->set_msg(std::string("ALREADY"));
             // return Status::CANCELLED;
-            std::cout << "ERR: USER ALREADY — handle case\n";//(!)
+            std::cout << "ERR: USER ALREADY — handle this case\n";//(!)
             break;
         }
     }

@@ -45,6 +45,41 @@ class Client : public IClient
 };
 
 /* (!) set fwds and move funcs after main (!) */
+/*struct IReply
+{
+    grpc::Status grpc_status;
+    enum IStatus comm_status;
+    std::vector<std::string> all_users;
+    std::vector<std::string> following_users;
+};*/
+IReply make_IReply(grpc::Status stat, Reply repl, std::string cmd) {
+    
+    // * Make IReply and copy grpc::Status
+    IReply irepl;
+    irepl.grpc_status = stat;
+
+    // * Parse by command, set IStatus and copy relevant data
+    if (cmd == "LIST") {
+
+        int n_users = repl.all_users_size();
+        if (stat.ok() && n_users > 0)
+            irepl.comm_status = SUCCESS;
+        else
+            irepl.comm_status = FAILURE_UNKNOWN;
+
+        // * Fill all users vector
+        for (int i = 0; i < n_users; i++)
+            irepl.all_users.push_back(repl.all_users(i));
+        // * Fill all following users vector
+        for (int i = 0; i < repl.following_users_size(); i++)
+            irepl.following_users.push_back(repl.following_users(i));
+        
+    } else {
+        std::cout << "make_IReply not completed\n";//(!)
+    }
+
+    return irepl;
+}
 
 IReply Client::processCommand(std::string& input)
 {
@@ -74,16 +109,29 @@ IReply Client::processCommand(std::string& input)
     // * Set stub message to the command and issue request to service
 	if (input == std::string("FOLLOW")) {
         // req.set_arguments(0, "FOLLOW"); // repeated takes (idx, c_str)
-        stat = stub_->Follow(&ctx, req, &repl);
+        // std::cout << "Needs TIMELINE mode\n";//(!)
+        // stat = stub_->Follow(&ctx, req, &repl);
+
     } else if (input == std::string("UNFOLLOW")) {
-        stat = stub_->UnFollow(&ctx, req, &repl);
+        // std::cout << "Needs TIMELINE mode\n";//(!)
+        // stat = stub_->UnFollow(&ctx, req, &repl);
+
     } else if (input == std::string("LIST")) {
         stat = stub_->List(&ctx, req, &repl);
+        
+
     } else if (input == std::string("TIMELINE")) {
-        stat = stub_->Timeline(&ctx, req, &repl);
+        // std::cout << "Not sending TIMELINE, needs ServerReaderWriter stream\n";//(!)
+        // stat = stub_->Timeline(&ctx, req, &repl);
     } else {
         std::cout << "ERR: Unknown command\n";
     }
+
+    
+    if (!stat.ok()) {//(!)
+        std::cout << "ERR: not OK\n";//(!)
+        std::cout << "(!) "<< stat.error_code() << ' ' << stat.error_message() << '\n';//(!)
+    } else std::cout << "Status OK\n";//(!)
 
     // ------------------------------------------------------------
 	// GUIDE 2:
@@ -93,6 +141,16 @@ IReply Client::processCommand(std::string& input)
     // the IReply.
 	// ------------------------------------------------------------
     
+    /*
+    struct IReply {
+        grpc::Status grpc_status;
+        enum IStatus comm_status;
+        std::vector<std::string> all_users;
+        std::vector<std::string> following_users;
+    };
+    */
+
+
 	// ------------------------------------------------------------
     // HINT: How to set the IReply?
     // Suppose you have "Follow" service method for FOLLOW command,
