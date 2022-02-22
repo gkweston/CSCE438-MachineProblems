@@ -1,0 +1,3 @@
+* Provision an amazon linux container with MP2 dependancies tagged csce438/mp2:build_env
+* This image is inherited and provisioned with project build files from ./../build
+* The final testing image is tagged as csce438/mp2:dev_env
