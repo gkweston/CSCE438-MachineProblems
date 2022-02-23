@@ -14,6 +14,7 @@ using grpc::Status;
 using grpc::ClientContext;
 using std::vector;
 using std::string;
+using std::cout;
 
 class Client : public IClient
 {
@@ -48,42 +49,6 @@ class Client : public IClient
 };
 
 /* (!) set fwds and move funcs after main (!) */
-/*struct IReply
-{
-    grpc::Status grpc_status;
-    enum IStatus comm_status;
-    vector<string> all_users;
-    vector<string> following_users;
-};*/
-IReply make_IReply(grpc::Status stat, Reply repl, string cmd) {
-    
-    // * Make IReply and copy grpc::Status
-    IReply irepl;
-    irepl.grpc_status = stat;
-
-    // * Parse by command, set IStatus and copy relevant data
-    if (cmd == "LIST") {
-
-        int n_users = repl.all_users_size();
-        if (stat.ok() && n_users > 0)
-            irepl.comm_status = SUCCESS;
-        else
-            irepl.comm_status = FAILURE_UNKNOWN;
-
-        // * Fill all users vector
-        for (int i = 0; i < n_users; i++)
-            irepl.all_users.push_back(repl.all_users(i));
-        // * Fill all following users vector
-        for (int i = 0; i < repl.following_users_size(); i++)
-            irepl.following_users.push_back(repl.following_users(i));
-        
-    } else {
-        std::cout << "make_IReply not completed\n";//(!)
-    }
-
-    return irepl;
-}
-
 vector<string> parse_input_string(string in, string delim=" ") {
     vector<string> arg_vec;
     size_t idx = 0;
@@ -99,20 +64,28 @@ vector<string> parse_input_string(string in, string delim=" ") {
     return arg_vec;
 }
 
+IStatus get_comm_stat(string msg) { // one way to do it...
+    if (msg == "SUCCESS")
+        return IStatus::SUCCESS;
+    else if (msg == "FAILURE_ALREADY_EXISTS")
+        return IStatus::FAILURE_ALREADY_EXISTS;
+    else if (msg == "FAILURE_NOT_EXISTS")
+        return IStatus::FAILURE_NOT_EXISTS;
+    else if (msg == "FAILURE_INVALID_USERNAME")
+        return IStatus::FAILURE_INVALID_USERNAME;
+    else if (msg == "FAILURE_INVALID")
+        return IStatus::FAILURE_INVALID;
+    else    
+        return IStatus::FAILURE_UNKNOWN;
+}
+
 IReply Client::processCommand(string& input)
 {
 	// ------------------------------------------------------------
-	// GUIDE 1:
-	// In this function, you are supposed to parse the given input
-    // command and create your own message so that you call an 
-    // appropriate service method. The input command will be one
-    // of the followings:
-	//
 	// FOLLOW <username>
 	// UNFOLLOW <username>
 	// LIST
     // TIMELINE
-	//
 	// ------------------------------------------------------------
     
     // * Inst. request
@@ -127,79 +100,70 @@ IReply Client::processCommand(string& input)
     IReply irepl;
     irepl.comm_status = FAILURE_UNKNOWN;
 
+    vector<string> arg_vec = parse_input_string(input);
+    string cmd = arg_vec[0];
+
     // * Set stub message to the command and issue request to service
-	if (input == string("FOLLOW")) {
-        // Parse input and ensure FOLLOW arg
+	if (cmd == "FOLLOW") {
+        // Ensure there is no more/less than 1 argument
+        if (arg_vec.size() != 2) {
+            cout << "Takes FOLLOW <username>\n";
+            cout << "ERR: cover this case";
+            return irepl;//(!)
+        }
 
-        // Set 
-        // req.set_arguments(0, "FOLLOW"); // repeated takes (idx, c_str)
-        // std::cout << "Needs TIMELINE mode\n";//(!)
-        // stat = stub_->Follow(&ctx, req, &repl);
+        // Set rpc arg as username
+        req.add_arguments(arg_vec[1]);
 
-    } else if (input == string("UNFOLLOW")) {
-        // std::cout << "Needs TIMELINE mode\n";//(!)
-        // stat = stub_->UnFollow(&ctx, req, &repl);
-
-    } else if (input == string("LIST")) {
-        stat = stub_->List(&ctx, req, &repl);
+        // Issue RPC and fill out IReply
+        stat = stub_->Follow(&ctx, req, &repl);
+        irepl.grpc_status = stat;
+        if (stat.ok())
+            // irepl.comm_status = SUCCESS;
+            irepl.comm_status = get_comm_stat(repl.msg());
+        else 
+            irepl.comm_status = FAILURE_UNKNOWN;
         
 
-    } else if (input == string("TIMELINE")) {
-        // std::cout << "Not sending TIMELINE, needs ServerReaderWriter stream\n";//(!)
+    } else if (cmd == "UNFOLLOW") {
+        // Parse input and ensure FOLLOW arg
+
+        // Set rpc arg as username
+
+        // Issue RPC
+
+        // Fill out IReply
+        
+
+    } else if (cmd == "LIST") {
+        
+        stat = stub_->List(&ctx, req, &repl);
+        irepl.grpc_status = stat;
+
+        // * Parse by command, set IStatus and copy relevant data
+        int n_users = repl.all_users_size();
+        if (stat.ok() && n_users > 0)
+            irepl.comm_status = SUCCESS;
+        else
+            irepl.comm_status = FAILURE_UNKNOWN;
+
+        // * Fill all users vector
+        for (int i = 0; i < n_users; i++)
+            irepl.all_users.push_back(repl.all_users(i));
+        // * Fill all following users vector
+        for (int i = 0; i < repl.following_users_size(); i++)
+            irepl.following_users.push_back(repl.following_users(i));
+        
+
+    } else if (cmd == "TIMELINE") {
+        // cout << "Not sending TIMELINE, needs ServerReaderWriter stream\n";//(!)
         // stat = stub_->Timeline(&ctx, req, &repl);
+        cout << "TIMELINE UNDONE\n";
     } else {
-        std::cout << "ERR: Unknown command\n";
+        cout << "ERR: Unknown command\n";
     }
 
-    
-    if (!stat.ok()) {//(!)
-        std::cout << "ERR: not OK\n";//(!)
-        std::cout << "(!) "<< stat.error_code() << ' ' << stat.error_message() << '\n';//(!)
-    } else std::cout << "Status OK\n";//(!)
-
-    // ------------------------------------------------------------
-	// GUIDE 2:
-	// Then, you should create a variable of IReply structure
-	// provided by the client.h and initialize it according to
-	// the result. Finally you can finish this function by returning
-    // the IReply.
-	// ------------------------------------------------------------
-    
-    /*
-    struct IReply {
-        grpc::Status grpc_status;
-        enum IStatus comm_status;
-        vector<string> all_users;
-        vector<string> following_users;
-    };
-    */
-
-
-	// ------------------------------------------------------------
-    // HINT: How to set the IReply?
-    // Suppose you have "Follow" service method for FOLLOW command,
-    // IReply can be set as follow:
-    // 
-    //     // some codes for creating/initializing parameters for
-    //     // service method
-    //     IReply ire;
-    //     grpc::Status status = stub_->Follow(&context, /* some parameters */);
-    //     ire.grpc_status = status;
-    //     if (status.ok()) {
-    //         ire.comm_status = SUCCESS;
-    //     } else {
-    //         ire.comm_status = FAILURE_NOT_EXISTS;
-    //     }
-    //      
-    //      return ire;
-    // 
-    // IMPORTANT: 
-    // For the command "LIST", you should set both "all_users" and 
-    // "following_users" member variable of IReply.
-    // ------------------------------------------------------------
-    
-    IReply ire;
-    return ire;
+    return irepl;
 }
 
 int Client::connectTo() {
@@ -216,12 +180,12 @@ int Client::connectTo() {
     
     // * Check the status returned on the RPC
     if (!status.ok()) {
-        std::cout << "(!) rpc:Login failed due to:" << '\n';
-        std::cout << "(!) "<< status.error_code() << ' ' << status.error_message() << '\n';
-        std::cout << "Buffer message: " << repl.msg() << '\n';
+        cout << "(!) rpc:Login failed due to:" << '\n';
+        cout << "(!) "<< status.error_code() << ' ' << status.error_message() << '\n';
+        cout << "Buffer message: " << repl.msg() << '\n';
         return 0;
     }
-    std::cout << "(!) rpc:Login success\n";//(!)
+    cout << "(!) rpc:Login success\n";//(!)
     std:: cout << "(!) reply.msg: " << repl.msg() << '\n';
     return 1;
 }
@@ -254,22 +218,6 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-/*
-int Client::connectTo()
-{
-	// ------------------------------------------------------------
-    // In this function, you are supposed to create a stub so that
-    // you call service methods in the processCommand/porcessTimeline
-    // functions. That is, the stub should be accessible when you want
-    // to call any service methods in those functions.
-    // I recommend you to have the stub as
-    // a member variable in your own Client class.
-    // Please refer to gRpc tutorial how to create a stub.
-	// ------------------------------------------------------------
-
-    return 1; // return 1 if success, otherwise return -1
-}
-*/
 
 void Client::processTimeline()
 {
