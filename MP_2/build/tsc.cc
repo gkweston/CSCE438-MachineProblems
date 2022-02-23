@@ -1,3 +1,5 @@
+/*HOST FILE DIFF*/
+/*REMOTE FILE DIFF*/
 #include <iostream>
 #include <string>
 #include <unistd.h>

@@ -1,9 +1,12 @@
-# csce438/mp2:dev_env
+# csce438/mp2:dev
 # --------------------------- NOTES --------------------------------
-# Provision the build env with ./build_env/Dockerfile then, from
-# this directory, run:
+# Provision the build env by running ./build_env/Dockerfile then,
+# from this directory, run:
+# `./start_dev_env.sh`
 # 
-# `docker build -t csce438/mp2:dev_env .`
+# OLD
+# 
+# `docker build -t csce438/mp2:dev .`
 # 
 # (EITHER) Enter the container's shell with:
 # `docker run -it csce438/mp2:test /bin/bash`
@@ -19,6 +22,3 @@ FROM csce438/mp2:build_env
 
 RUN mkdir /root/build
 COPY ./build /root/build/
-
-# RUN cd /root/build; \
-    # make;
