@@ -1,9 +1,8 @@
-/*HOST FILE DIFF*/
-/*REMOTE FILE DIFF*/
 #include <iostream>
 #include <string>
 #include <unistd.h>
 #include <grpc++/grpc++.h>
+#include <vector>
 #include "client.h"
 #include "sns.grpc.pb.h"
 
@@ -13,14 +12,16 @@ using csce438::Request;
 using csce438::Message;
 using grpc::Status;
 using grpc::ClientContext;
+using std::vector;
+using std::string;
 
 class Client : public IClient
 {
     
     public:
-        Client(const std::string& hname,
-               const std::string& uname,
-               const std::string& p) : 
+        Client(const string& hname,
+               const string& uname,
+               const string& p) : 
                hostname(hname), username(uname), port(p),
                stub_(
                     csce438::SNSService::NewStub(
@@ -33,12 +34,12 @@ class Client : public IClient
                
     protected:
         virtual int connectTo();
-        virtual IReply processCommand(std::string& input);
+        virtual IReply processCommand(string& input);
         virtual void processTimeline();
     private:
-        std::string hostname;
-        std::string username;
-        std::string port;
+        string hostname;
+        string username;
+        string port;
         
         // You can have an instance of the client stub
         // as a member variable.
@@ -51,10 +52,10 @@ class Client : public IClient
 {
     grpc::Status grpc_status;
     enum IStatus comm_status;
-    std::vector<std::string> all_users;
-    std::vector<std::string> following_users;
+    vector<string> all_users;
+    vector<string> following_users;
 };*/
-IReply make_IReply(grpc::Status stat, Reply repl, std::string cmd) {
+IReply make_IReply(grpc::Status stat, Reply repl, string cmd) {
     
     // * Make IReply and copy grpc::Status
     IReply irepl;
@@ -83,7 +84,22 @@ IReply make_IReply(grpc::Status stat, Reply repl, std::string cmd) {
     return irepl;
 }
 
-IReply Client::processCommand(std::string& input)
+vector<string> parse_input_string(string in, string delim=" ") {
+    vector<string> arg_vec;
+    size_t idx = 0;
+    string tok;
+
+    while ( (idx = in.find(delim) ) != string::npos) {
+        tok = in.substr(0, idx);
+        arg_vec.push_back(tok);
+
+        in.erase(0, idx+delim.length());
+    }
+    arg_vec.push_back(in);
+    return arg_vec;
+}
+
+IReply Client::processCommand(string& input)
 {
 	// ------------------------------------------------------------
 	// GUIDE 1:
@@ -108,21 +124,27 @@ IReply Client::processCommand(std::string& input)
     Reply repl;
     Status stat;
 
+    IReply irepl;
+    irepl.comm_status = FAILURE_UNKNOWN;
+
     // * Set stub message to the command and issue request to service
-	if (input == std::string("FOLLOW")) {
+	if (input == string("FOLLOW")) {
+        // Parse input and ensure FOLLOW arg
+
+        // Set 
         // req.set_arguments(0, "FOLLOW"); // repeated takes (idx, c_str)
         // std::cout << "Needs TIMELINE mode\n";//(!)
         // stat = stub_->Follow(&ctx, req, &repl);
 
-    } else if (input == std::string("UNFOLLOW")) {
+    } else if (input == string("UNFOLLOW")) {
         // std::cout << "Needs TIMELINE mode\n";//(!)
         // stat = stub_->UnFollow(&ctx, req, &repl);
 
-    } else if (input == std::string("LIST")) {
+    } else if (input == string("LIST")) {
         stat = stub_->List(&ctx, req, &repl);
         
 
-    } else if (input == std::string("TIMELINE")) {
+    } else if (input == string("TIMELINE")) {
         // std::cout << "Not sending TIMELINE, needs ServerReaderWriter stream\n";//(!)
         // stat = stub_->Timeline(&ctx, req, &repl);
     } else {
@@ -147,8 +169,8 @@ IReply Client::processCommand(std::string& input)
     struct IReply {
         grpc::Status grpc_status;
         enum IStatus comm_status;
-        std::vector<std::string> all_users;
-        std::vector<std::string> following_users;
+        vector<string> all_users;
+        vector<string> following_users;
     };
     */
 
@@ -206,9 +228,9 @@ int Client::connectTo() {
 
 int main(int argc, char** argv) {
 
-    std::string hostname = "localhost";
-    std::string username = "default";
-    std::string port = "3010";
+    string hostname = "localhost";
+    string username = "default";
+    string port = "3010";
     int opt = 0;
     while ((opt = getopt(argc, argv, "h:u:p:")) != -1){
         switch(opt) {

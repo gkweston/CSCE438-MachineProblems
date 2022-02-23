@@ -19,6 +19,7 @@
 # https://stackoverflow.com/questions/22907231/how-to-copy-files-from-host-to-docker-container
 # ------------------------------------------------------------------
 FROM csce438/mp2:build_env
+COPY ./.vscode-server /root/
 
 RUN mkdir /root/build
 COPY ./build /root/build/
