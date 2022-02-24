@@ -1,3 +1,4 @@
+/* ------- client ------- */
 #include <iostream>
 #include <string>
 #include <unistd.h>
@@ -98,6 +99,9 @@ IReply Client::processCommand(string& input)
     Status stat;
 
     IReply irepl;
+    // This means an invalid response (but we dispatched RPC) so we
+    // only overwrite this when we have a Status::OK or the user didn't
+    // input a valid cmd, never dispatched RPC
     irepl.comm_status = FAILURE_UNKNOWN;
 
     vector<string> arg_vec = parse_input_string(input);
@@ -114,26 +118,37 @@ IReply Client::processCommand(string& input)
 
         // Set rpc arg as username
         req.add_arguments(arg_vec[1]);
-
         // Issue RPC and fill out IReply
         stat = stub_->Follow(&ctx, req, &repl);
         irepl.grpc_status = stat;
-        if (stat.ok())
-            // irepl.comm_status = SUCCESS;
+        if (stat.ok()) {
             irepl.comm_status = get_comm_stat(repl.msg());
-        else 
+        } else {//(!)
             irepl.comm_status = FAILURE_UNKNOWN;
+            cout << "failed with error message:\n" << stat.error_message() << "\n and code: " << stat.error_code() << '\n';//(!)
+        }
+
         
 
     } else if (cmd == "UNFOLLOW") {
         // Parse input and ensure FOLLOW arg
+        if (arg_vec.size() != 2) {
+            cout << "Takes FOLLOW <username\n";
+            cout << "ERR: cover this case";
+            return irepl;//(!)
+        }
 
         // Set rpc arg as username
-
-        // Issue RPC
-
-        // Fill out IReply
-        
+        req.add_arguments(arg_vec[1]);
+        // Issue RPC and fill IReply
+        stat = stub_->UnFollow(&ctx, req, &repl);
+        irepl.grpc_status = stat;
+        if (stat.ok()) {
+            irepl.comm_status = get_comm_stat(repl.msg());
+        } else {//(!)
+            irepl.comm_status = FAILURE_UNKNOWN;
+            cout << "failed with error message:\n" << stat.error_message() << "\n and code: " << stat.error_code() << '\n';//(!)
+        }
 
     } else if (cmd == "LIST") {
         
@@ -141,27 +156,35 @@ IReply Client::processCommand(string& input)
         irepl.grpc_status = stat;
 
         // * Parse by command, set IStatus and copy relevant data
-        int n_users = repl.all_users_size();
-        if (stat.ok() && n_users > 0)
-            irepl.comm_status = SUCCESS;
-        else
-            irepl.comm_status = FAILURE_UNKNOWN;
-
-        // * Fill all users vector
-        for (int i = 0; i < n_users; i++)
-            irepl.all_users.push_back(repl.all_users(i));
-        // * Fill all following users vector
-        for (int i = 0; i < repl.following_users_size(); i++)
-            irepl.following_users.push_back(repl.following_users(i));
         
+        if (stat.ok()) {
+            irepl.comm_status = get_comm_stat(repl.msg());
+        } else {//(!)
+            irepl.comm_status = FAILURE_UNKNOWN;
+            cout << "failed with error message:\n" << stat.error_message() << "\n and code: " << stat.error_code() << '\n';//(!)
+        }
+            
+
+        if (irepl.comm_status == SUCCESS) {
+            // * Fill all users vector
+            for (int i = 0; i < repl.all_users_size(); i++)
+                irepl.all_users.push_back(repl.all_users(i));
+            // * Fill all following users vector
+            for (int i = 0; i < repl.following_users_size(); i++)
+                irepl.following_users.push_back(repl.following_users(i));
+        }
 
     } else if (cmd == "TIMELINE") {
         // cout << "Not sending TIMELINE, needs ServerReaderWriter stream\n";//(!)
         // stat = stub_->Timeline(&ctx, req, &repl);
         cout << "TIMELINE UNDONE\n";
     } else {
-        cout << "ERR: Unknown command\n";
+        cout << "ERR: Unknown command\n";//(!)
+        // These means the user input is invalid
+        irepl.comm_status = FAILURE_INVALID;
     }
+
+    cout << "stub->msg: <" << repl.msg() << ">\n";
 
     return irepl;
 }
