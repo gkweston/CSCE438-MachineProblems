@@ -17,36 +17,30 @@ using std::vector;
 using std::string;
 using std::cout;
 
-class Client : public IClient
-{
-    
+class Client : public IClient {
     public:
-        Client(const string& hname,
-               const string& uname,
-               const string& p) : 
-               hostname(hname), username(uname), port(p),
-               stub_(
-                    csce438::SNSService::NewStub(
-                        grpc::CreateChannel(
-                            hostname + ":" + port,
-                            grpc::InsecureChannelCredentials()
-                        )
-                    ) 
-                ) { }
-               
+    Client(const string& hname, const string& uname, const string& p) {
+        hostname = hname;
+        username = uname;
+        port = p;
+        stub_ = csce438::SNSService::NewStub(
+            grpc::CreateChannel(
+                hostname + ":" + port,
+                grpc::InsecureChannelCredentials()
+            )
+        );
+    }
     protected:
-        virtual int connectTo();
-        virtual IReply processCommand(string& input);
-        virtual void processTimeline();
+    virtual int connectTo();
+    virtual IReply processCommand(string& input);
+    virtual void processTimeline();
+
     private:
-        string hostname;
-        string username;
-        string port;
-        
-        // You can have an instance of the client stub
-        // as a member variable.
-        // std::unique_ptr<NameOfYourStubClass::Stub> stub_;
-        std::unique_ptr<csce438::SNSService::Stub> stub_;
+    string hostname;
+    string username;
+    string port;
+    
+    std::unique_ptr<csce438::SNSService::Stub> stub_;
 };
 
 /* (!) set fwds and move funcs after main (!) */
@@ -58,7 +52,6 @@ vector<string> parse_input_string(string in, string delim=" ") {
     while ( (idx = in.find(delim) ) != string::npos) {
         tok = in.substr(0, idx);
         arg_vec.push_back(tok);
-
         in.erase(0, idx+delim.length());
     }
     arg_vec.push_back(in);
@@ -66,8 +59,7 @@ vector<string> parse_input_string(string in, string delim=" ") {
 }
 
 IStatus get_comm_stat(string msg) { // one way to do it...
-    if (msg == "SUCCESS")
-        return IStatus::SUCCESS;
+    if (msg == "SUCCESS") return IStatus::SUCCESS;
     else if (msg == "FAILURE_ALREADY_EXISTS")
         return IStatus::FAILURE_ALREADY_EXISTS;
     else if (msg == "FAILURE_NOT_EXISTS")
@@ -128,9 +120,8 @@ IReply Client::processCommand(string& input)
             cout << "failed with error message:\n" << stat.error_message() << "\n and code: " << stat.error_code() << '\n';//(!)
         }
 
-        
-
-    } else if (cmd == "UNFOLLOW") {
+    }
+    else if (cmd == "UNFOLLOW") {
         // Parse input and ensure FOLLOW arg
         if (arg_vec.size() != 2) {
             cout << "Takes FOLLOW <username\n";
@@ -150,7 +141,8 @@ IReply Client::processCommand(string& input)
             cout << "failed with error message:\n" << stat.error_message() << "\n and code: " << stat.error_code() << '\n';//(!)
         }
 
-    } else if (cmd == "LIST") {
+    }
+    else if (cmd == "LIST") {
         
         stat = stub_->List(&ctx, req, &repl);
         irepl.grpc_status = stat;
@@ -174,23 +166,22 @@ IReply Client::processCommand(string& input)
                 irepl.following_users.push_back(repl.following_users(i));
         }
 
-    } else if (cmd == "TIMELINE") {
+    }
+    else if (cmd == "TIMELINE") {
         // cout << "Not sending TIMELINE, needs ServerReaderWriter stream\n";//(!)
         // stat = stub_->Timeline(&ctx, req, &repl);
         cout << "TIMELINE UNDONE\n";
-    } else {
-        cout << "ERR: Unknown command\n";//(!)
+    }
+    else {
         // These means the user input is invalid
         irepl.comm_status = FAILURE_INVALID;
     }
 
-    cout << "stub->msg: <" << repl.msg() << ">\n";
-
+    cout << "stub->msg: <" << repl.msg() << ">\n";//(!)
     return irepl;
 }
 
 int Client::connectTo() {
-    
     // * Issue a Login command to the server to give our username
     // 1 init a request with the given uname
     Request req;
@@ -203,13 +194,9 @@ int Client::connectTo() {
     
     // * Check the status returned on the RPC
     if (!status.ok()) {
-        cout << "(!) rpc:Login failed due to:" << '\n';
-        cout << "(!) "<< status.error_code() << ' ' << status.error_message() << '\n';
-        cout << "Buffer message: " << repl.msg() << '\n';
         return 0;
     }
-    cout << "(!) rpc:Login success\n";//(!)
-    std:: cout << "(!) reply.msg: " << repl.msg() << '\n';
+    std:: cout << "logged in: " << repl.msg() << '\n';//(!)
     return 1;
 }
 
