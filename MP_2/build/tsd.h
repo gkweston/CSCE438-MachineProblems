@@ -1,9 +1,7 @@
 #include <vector>
 #include <string>
-using namespace std;
 
-// Error codes
-// (!) Convert to single char error codes so we don't send extra data on the wire, place in header
+// Error codes - autocomplete helps use make less mistakes :)
 #define SUCCESS                     ("SUCCESS")
 #define FAILURE_ALREADY_EXISTS      ("FAILURE_ALREADY_EXISTS")
 #define FAILURE_NOT_EXISTS          ("FAILURE_NOT_EXISTS")
@@ -13,15 +11,18 @@ using namespace std;
 
 // Store username->followers in memory which enables us to track the followers for
 // a given user and conduct some operations on them
-struct UserEntry {
-    string username;
-    vector<string> following_users;
+struct User {
+    std::string username;
+    std::vector<std::string> following_users;
+    bool timeline_mode;
 
     // Users start by following themselves
-    UserEntry(string n) : username(n) { 
-        following_users.push_back(n);
+    User(std::string n) : username(n) { 
+        // following_users.push_back(n);
+        following_users = std::vector<std::string>(1, n); //safer
+        timeline_mode = false;
     }
-    int is_following(string uname) {
+    int is_following(std::string uname) {
         // Return idx of user following,
         //         -1 if none
         for (int idx = 0; idx < following_users.size(); idx++) {
@@ -31,7 +32,7 @@ struct UserEntry {
         }
         return -1;
     }
-    bool pop_follower(string uname) {
+    bool pop_follower(std::string uname) {
         // Return true: if the user was following and was removed,
         //       false: if the user isn't following
         for (int i = 0; i < following_users.size(); i++) {
@@ -44,19 +45,31 @@ struct UserEntry {
     }
 };
 
-struct EntryTable {
-    vector<UserEntry*> table;
-    void add_user(string uname) {
-        table.push_back(new UserEntry(uname));
+// ------- Unimplemented | Untested -------
+struct UserTable {
+    // We're pointing, because if a user is removed we can no longer
+    // refer to their index in users as a pointer
+    std::vector<User*> users;
+
+    UserTable() : users(std::vector<User*>()) { }
+    ~UserTable() {
+        for (int i = 0; i < users.size(); i++) {
+            delete users[i];
+        }
     }
-    UserEntry* get_user_entry(string uname) {
-        // Return UserEntry* for given uname,
-        //        nullptr if no entry found
-        for (int i = 0; i < table.size(); i++) {
-            if (table[i]->username == uname) {
-                return table[i];
+    User* get_user_entry(std::string uname) { // if pointing, return nullptr
+        // Return User* entry in users table
+        //        nullptr if not found
+        for (int idx = 0; idx < users.size(); idx++) {
+            if (users[idx]->username == uname) {
+                return users[idx];
             }
         }
         return nullptr;
     }
+    void add_user(std::string uname) { users.push_back(new User(uname)); }
+
+    // TODO
+    bool read_users(std::string file);
+    bool write_users(std::string file);
 };

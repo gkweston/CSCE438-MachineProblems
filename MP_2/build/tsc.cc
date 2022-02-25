@@ -6,6 +6,7 @@
 #include <vector>
 #include "client.h"
 #include "sns.grpc.pb.h"
+#include <thread>
 
 using csce438::SNSService;
 using csce438::Reply;
@@ -74,13 +75,6 @@ IStatus get_comm_stat(string msg) { // one way to do it...
 
 IReply Client::processCommand(string& input)
 {
-	// ------------------------------------------------------------
-	// FOLLOW <username>
-	// UNFOLLOW <username>
-	// LIST
-    // TIMELINE
-	// ------------------------------------------------------------
-    
     // * Inst. request
     Request req;
     req.set_username(username);
@@ -91,9 +85,8 @@ IReply Client::processCommand(string& input)
     Status stat;
 
     IReply irepl;
-    // This means an invalid response (but we dispatched RPC) so we
-    // only overwrite this when we have a Status::OK or the user didn't
-    // input a valid cmd, never dispatched RPC
+    // Recv'd response, but something went wrong, we overwrite this
+    // only when we recv a valid resp
     irepl.comm_status = FAILURE_UNKNOWN;
 
     vector<string> arg_vec = parse_input_string(input);
@@ -103,9 +96,8 @@ IReply Client::processCommand(string& input)
 	if (cmd == "FOLLOW") {
         // Ensure there is no more/less than 1 argument
         if (arg_vec.size() != 2) {
-            cout << "Takes FOLLOW <username>\n";
-            cout << "ERR: cover this case";
-            return irepl;//(!)
+            irepl.comm_status = FAILURE_INVALID; // invalid user input
+            return irepl;
         }
 
         // Set rpc arg as username
@@ -116,7 +108,7 @@ IReply Client::processCommand(string& input)
         if (stat.ok()) {
             irepl.comm_status = get_comm_stat(repl.msg());
         } else {//(!)
-            irepl.comm_status = FAILURE_UNKNOWN;
+            irepl.comm_status = FAILURE_UNKNOWN; // connection probably terminated on user's end
             cout << "failed with error message:\n" << stat.error_message() << "\n and code: " << stat.error_code() << '\n';//(!)
         }
 
@@ -124,9 +116,8 @@ IReply Client::processCommand(string& input)
     else if (cmd == "UNFOLLOW") {
         // Parse input and ensure FOLLOW arg
         if (arg_vec.size() != 2) {
-            cout << "Takes FOLLOW <username\n";
-            cout << "ERR: cover this case";
-            return irepl;//(!)
+            irepl.comm_status = FAILURE_INVALID;
+            return irepl;
         }
 
         // Set rpc arg as username
@@ -143,12 +134,11 @@ IReply Client::processCommand(string& input)
 
     }
     else if (cmd == "LIST") {
-        
+        // * Dispatch LIST req
         stat = stub_->List(&ctx, req, &repl);
         irepl.grpc_status = stat;
 
         // * Parse by command, set IStatus and copy relevant data
-        
         if (stat.ok()) {
             irepl.comm_status = get_comm_stat(repl.msg());
         } else {//(!)
@@ -170,11 +160,20 @@ IReply Client::processCommand(string& input)
     else if (cmd == "TIMELINE") {
         // cout << "Not sending TIMELINE, needs ServerReaderWriter stream\n";//(!)
         // stat = stub_->Timeline(&ctx, req, &repl);
-        cout << "TIMELINE UNDONE\n";
+        // cout << "TIMELINE'ing\n";//(!)
+
+        // * Dispatch a TIMELINE message to init a stream
+
+        // * Unpack grpc_stat and comm_stat, we need an ok() && SUCCESS to
+        //   move on to processTimeline() 
+        
+        // -------(!)
+        // Faking a good TIMELINE receipt to test processTimeline
+        irepl.grpc_status = grpc::Status::OK;
+        irepl.comm_status = SUCCESS;
     }
     else {
-        // These means the user input is invalid
-        irepl.comm_status = FAILURE_INVALID;
+        irepl.comm_status = FAILURE_INVALID; // invalid user input
     }
 
     cout << "stub->msg: <" << repl.msg() << ">\n";//(!)
@@ -229,22 +228,43 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-void Client::processTimeline()
-{
-	// ------------------------------------------------------------
-    // In this function, you are supposed to get into timeline mode.
-    // You may need to call a service method to communicate with
-    // the server. Use getPostMessage/displayPostMessage functions
-    // for both getting and displaying messages in timeline mode.
-    // You should use them as you did in hw1.
-	// ------------------------------------------------------------
+void Client::processTimeline() {
 
-    // ------------------------------------------------------------
-    // IMPORTANT NOTICE:
-    //
-    // Once a user enter to timeline mode , there is no way
-    // to command mode. You don't have to worry about this situation,
-    // and you can terminate the client program by pressing
-    // CTRL-C (SIGINT)
-	// ------------------------------------------------------------
+    // * Dispatch a thread, or use gRPC native threading to displayPostMessage
+    //   from stream and display the last 10 messages from server
+    //   (AND)
+    // * Monitor stdin to getPostMessage from user
+
+    // * repeat
+
+    // -------(!)
+    // Send msg, get resp...die
+    ClientContext ctx;
+    std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> stream (
+        stub_->Timeline(&ctx)
+    );
+    
+    std::thread writer([stream]() {
+        //take input
+        string user_in = getPostMessage();
+        // set username, message, timestamp (!)hardcoded
+        Message msg;
+        msg.set_username("bokehbox");
+        msg.set_msg(user_in);
+        // msg.timestamp() (!)(!)
+        stream->Write(msg);
+        stream->WritesDone();
+    });
+
+    Message server_msg;
+    while (stream->Read(&server_msg)) {
+        // displayPostMessage(...);
+        cout << server_msg.msg() << '\n';
+    }
+    writer.join();
+    Status stat = stream->Finish();
+    if (!stat.ok()) {
+        cout << "Stream failed...\n";
+    }
+
 }

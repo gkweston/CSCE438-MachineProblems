@@ -1,9 +1,7 @@
 /* ------- server ------- */
 #include <ctime>
-
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
-
 #include <fstream>
 #include <vector>
 #include <iostream>
@@ -13,7 +11,6 @@
 #include <unistd.h>
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
-
 #include "sns.grpc.pb.h"
 #include "tsd.h"
 
@@ -36,8 +33,6 @@ using std::cout;
 
 /* NOTES
 1. for persistant memory coding points, search: (!)data_store
-2. Implement EntryTable on Login/Follow/UnFollow
-3. covert error msg strings to pseudo-enum #define type
 4. If a user's connection is lost we need to evist them from all_users and following_users for each user
 */
 
@@ -46,15 +41,15 @@ class SNSServiceImpl final : public SNSService::Service {
     Status List(ServerContext* context, const Request* request, Reply* reply) override {
         // Fill the all_users protobuf, when we find current
         // user's name we save their entry to copy followers
-        UserEntry* this_user = nullptr;
-        for (int i = 0; i < user_entry_table.size(); i++) {
-            string uname = user_entry_table[i]->username;
+        User* this_user = nullptr;
+        for (int i = 0; i < users.size(); i++) {
+            string uname = users[i]->username;
             reply->add_all_users(uname.c_str());
             if (uname == request->username()) {
-                this_user = user_entry_table[i];
+                this_user = users[i];
             }
         }
-        // Check if username not found in user_entry_table
+        // Check if username not found in users
         if (!this_user) {
             reply->set_msg(FAILURE_INVALID_USERNAME);
             return Status::OK;
@@ -82,7 +77,7 @@ class SNSServiceImpl final : public SNSService::Service {
             return Status::OK;
         }
         // Check if user is trying to follow one which DNE
-        UserEntry* ufollow_entry = get_user_entry(uname_to_follow);
+        User* ufollow_entry = get_user_entry(uname_to_follow);
         if (ufollow_entry == nullptr) {
             reply->set_msg(FAILURE_NOT_EXISTS);//(!)
             return Status::OK;
@@ -112,7 +107,7 @@ class SNSServiceImpl final : public SNSService::Service {
             reply->set_msg(FAILURE_INVALID_USERNAME);
             return Status::OK;
         }
-        UserEntry* ufollow_entry = get_user_entry(unfollow_name);
+        User* ufollow_entry = get_user_entry(unfollow_name);
         // Check if user tries to follow one which DNE
         if (ufollow_entry == nullptr) {
             reply->set_msg(FAILURE_NOT_EXISTS);
@@ -133,44 +128,70 @@ class SNSServiceImpl final : public SNSService::Service {
         */
         // * Check if uname already - handle this case... (!)
         string uname = request->username();
-        for (int i = 0; i < user_entry_table.size(); i++) {
-            if (user_entry_table[i]->username == uname) {
+        for (int i = 0; i < users.size(); i++) {
+            if (users[i]->username == uname) {
                 cout << "ERR: USER ALREADY — handle this case\n";//(!)
                 break;
             }
         }
         // * Add to user table and return OK
-        UserEntry* uentry = new UserEntry(uname);
-        user_entry_table.push_back(uentry);
-        reply->set_msg(string("ok, hello ") + request->username());//(!)
+        User* uentry = new User(uname);
+        users.push_back(uentry);
+        reply->set_msg(string("oh, hi ") + request->username() + string("!"));//(!)
         return Status::OK;
     }
 
-    Status Timeline(ServerContext* context,
-                    ServerReaderWriter<Message, Message>* stream) override {
+    Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
     // ------------------------------------------------------------
     // In this function, you are to write code that handles 
     // receiving a message/post from a user, recording it in a file
     // and then making it available on his/her follower's streams
     // ------------------------------------------------------------
+        // * read message from stream
+
+        // * take username
+
+        // * find username entry in users table
+
+        // * set that username's TIMELINE mode variable to true (?)
+
+        // * for each follower in that user, write a message to their stream
+        //   (?) iff the stream is open (the follower is in TIMELINE mode)
+
+        // * repeat
+        // return Status::OK;
+        // -------(!)
+        // Send some test messages to see if stream works
+        Message send1, send2;
+        send1.set_username("bokeh");
+        send1.set_msg("oh, hi bokeh!");
+        send2.set_username("box");
+        send2.set_msg("oh, hi box!");
+
+        Message msg_recv;
+        while (stream->Read(&msg_recv)) {
+            // std::unique_lock<std::mutex> lock(mutx);(!)
+            cout << "Hello: " << msg_recv.username() << '\n';
+            cout << ">> " << msg_recv.msg() << '\n';
+            stream->Write(send1);
+            stream->Write(send2);
+        }
         return Status::OK;
     }
-    // vector<string> user_table; //(!) should exist in persistant storage
-    vector<UserEntry*> user_entry_table;
 
+    /* User memory containers and functions */
+    vector<User*> users; //(!) should exist in persistant storage
     // Returns the user entry for specific username, or null if none found
-    UserEntry* get_user_entry(string uname) {
-        cout << "Looking for: " << uname << '\n';//(!)
-        for (int i = 0; i < user_entry_table.size(); i++) {
-            cout << "Found: " << user_entry_table[i]->username << '\n';//(!)
-            if (user_entry_table[i]->username == uname) {
-                cout << uname << "==" << user_entry_table[i]->username << '\n';//(!)
-                return user_entry_table[i];
+    User* get_user_entry(string uname) {
+        for (int i = 0; i < users.size(); i++) {
+            if (users[i]->username == uname) {
+                return users[i];
             }
         }
-        cout << uname << " not found\n";//(!)
         return nullptr;
     }
+    bool read_users(string path);//(!)data_store
+    bool write_users(string path);//(!)data_store
 };
 
 void RunServer(string port_no) {
@@ -183,7 +204,7 @@ void RunServer(string port_no) {
     // (!)data_store
     // * Check if there's a user_data_store file
     // if not, create one
-    // if so, read data into user_entry_table vector
+    // if so, read data into users vector
 
     //* Make init service and server builder
     string addr = string("127.0.0.1:") + port_no;
