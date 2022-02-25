@@ -234,34 +234,43 @@ void Client::processTimeline() {
     //   from stream and display the last 10 messages from server
     //   (AND)
     // * Monitor stdin to getPostMessage from user
-
     // * repeat
 
-    // -------(!)
-    // Send msg, get resp...die
-    ClientContext ctx;
+    // Send msg, get resp, repeat
+    string uname = username;
+
+    ClientContext ctx;  //don't reuse?
     std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> stream (
         stub_->Timeline(&ctx)
     );
-    
-    std::thread writer([stream]() {
-        //take input
-        string user_in = getPostMessage();
-        // set username, message, timestamp (!)hardcoded
-        Message msg;
-        msg.set_username("bokehbox");
-        msg.set_msg(user_in);
-        // msg.timestamp() (!)(!)
-        stream->Write(msg);
-        stream->WritesDone();
-    });
 
-    Message server_msg;
-    while (stream->Read(&server_msg)) {
-        // displayPostMessage(...);
-        cout << server_msg.msg() << '\n';
+    while (true) {//(!)(!)
+        // set timestamp(!)
+        std::thread writer([&]() {
+            // * Init connection
+            Message client_msg;
+            client_msg.set_username(uname);
+            client_msg.set_msg("INIT");
+
+            while (stream->Write(client_msg)) {
+                client_msg.set_msg(getPostMessage());
+                // set usname and stuff?
+            }
+            stream->WritesDone();
+        });
+
+        std::thread reader([&]() {
+            Message serv_msg;
+            while (stream->Read(&serv_msg)) {
+                // displayPostMessage()
+                cout << serv_msg.msg() << '\n';
+            }
+        });
+        reader.join();
+        writer.join();    
     }
-    writer.join();
+    
+
     Status stat = stream->Finish();
     if (!stat.ok()) {
         cout << "Stream failed...\n";

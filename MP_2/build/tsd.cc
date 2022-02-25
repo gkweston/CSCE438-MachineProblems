@@ -161,23 +161,40 @@ class SNSServiceImpl final : public SNSService::Service {
         // * repeat
         // return Status::OK;
         // -------(!)
-        // Send some test messages to see if stream works
-        Message send1, send2;
-        send1.set_username("bokeh");
-        send1.set_msg("oh, hi bokeh!");
-        send2.set_username("box");
-        send2.set_msg("oh, hi box!");
+        
+        while (true) {
+            Message recv, send;
+            while (stream->Read(&recv)) {
 
-        Message msg_recv;
-        while (stream->Read(&msg_recv)) {
-            // std::unique_lock<std::mutex> lock(mutx);(!)
-            cout << "Hello: " << msg_recv.username() << '\n';
-            cout << ">> " << msg_recv.msg() << '\n';
-            stream->Write(send1);
-            stream->Write(send2);
+                if (recv.msg() == "INIT") {
+                    std::unique_lock<std::mutex> lock(mtx);
+                    streams.push_back(stream);
+                    std::unique_lock<std::mutex> unlock(mtx);
+                }
+
+                cout << ">>>SERVER\n";
+                cout << "uname " << recv.username() << "\n";
+                cout << "recvd " << recv.msg();
+                cout << "\n>>>\n";
+
+                send.set_msg(string("sent by ") + recv.username());
+                // stream->Write(send);
+             
+                for (int i = 0; i < streams.size(); i++) {
+                    std::unique_lock<std::mutex> lock(mtx);
+                    streams[i]->Write(send);
+                    std::unique_lock<std::mutex> unlock(mtx);
+                }
+            }
         }
+        // cout << ">>>SERVER OUT OF LOOP<<<\n";
+        // We don't hit this point until client disco
         return Status::OK;
     }
+
+    /* Testing streams */
+    vector<ServerReaderWriter<Message, Message>*> streams;
+    std::mutex mtx;
 
     /* User memory containers and functions */
     vector<User*> users; //(!) should exist in persistant storage
