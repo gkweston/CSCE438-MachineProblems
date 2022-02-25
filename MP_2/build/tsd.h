@@ -1,5 +1,12 @@
 #include <vector>
 #include <string>
+#include <grpc++/grpc++.h>
+
+#include "sns.grpc.pb.h"
+
+// Bad practice, but we only include in tsd.cc so should be fine
+using grpc::ServerReaderWriter;
+using csce438::Message;
 
 // Error codes - autocomplete helps use make less mistakes :)
 #define SUCCESS                     ("SUCCESS")
@@ -15,12 +22,14 @@ struct User {
     std::string username;
     std::vector<std::string> following_users;
     bool timeline_mode;
+    ServerReaderWriter<Message, Message>* stream;
 
     // Users start by following themselves
     User(std::string n) : username(n) { 
         // following_users.push_back(n);
         following_users = std::vector<std::string>(1, n); //safer
         timeline_mode = false;
+        stream = nullptr;
     }
     int is_following(std::string uname) {
         // Return idx of user following,
@@ -43,7 +52,21 @@ struct User {
         }
         return false;
     }
+
+    void set_stream(ServerReaderWriter<Message, Message>* s) {
+        stream = s;
+        timeline_mode = true;
+    }
 };
+
+// struct UserStream {
+//     std::string username;
+//     grpc::ServerReaderWriter<Message, Message>* stream;
+//     UserStream(std::string n, grpc::ServerReaderWriter<Message, Message>* s) {
+//         username = n;
+//         stream = s;
+//     }
+// };
 
 // ------- Unimplemented | Untested -------
 struct UserTable {

@@ -158,15 +158,6 @@ IReply Client::processCommand(string& input)
 
     }
     else if (cmd == "TIMELINE") {
-        // cout << "Not sending TIMELINE, needs ServerReaderWriter stream\n";//(!)
-        // stat = stub_->Timeline(&ctx, req, &repl);
-        // cout << "TIMELINE'ing\n";//(!)
-
-        // * Dispatch a TIMELINE message to init a stream
-
-        // * Unpack grpc_stat and comm_stat, we need an ok() && SUCCESS to
-        //   move on to processTimeline() 
-        
         // -------(!)
         // Faking a good TIMELINE receipt to test processTimeline
         irepl.grpc_status = grpc::Status::OK;
@@ -263,7 +254,7 @@ void Client::processTimeline() {
             Message serv_msg;
             while (stream->Read(&serv_msg)) {
                 // displayPostMessage()
-                cout << serv_msg.msg() << '\n';
+                cout << serv_msg.msg();
             }
         });
         reader.join();

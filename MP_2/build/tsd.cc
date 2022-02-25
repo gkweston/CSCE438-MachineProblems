@@ -2,6 +2,8 @@
 #include <ctime>
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
+#include <google/protobuf/util/time_util.h>
+#include <grpc++/grpc++.h>
 #include <fstream>
 #include <vector>
 #include <iostream>
@@ -9,9 +11,8 @@
 #include <string>
 #include <stdlib.h>
 #include <unistd.h>
-#include <google/protobuf/util/time_util.h>
-#include <grpc++/grpc++.h>
-#include "sns.grpc.pb.h"
+
+// #include "sns.grpc.pb.h"
 #include "tsd.h"
 
 using google::protobuf::Timestamp;
@@ -31,10 +32,12 @@ using std::string;
 using std::vector;
 using std::cout;
 
-/* NOTES
-1. for persistant memory coding points, search: (!)data_store
-4. If a user's connection is lost we need to evist them from all_users and following_users for each user
-*/
+/* TODO
+ * Message routing with a vector for following and followers
+ * Time stamps & message formatting
+ * Data store search: (!)data_store
+ * USER_ALREADY case on Login
+ */
 
 class SNSServiceImpl final : public SNSService::Service {
   
@@ -142,62 +145,61 @@ class SNSServiceImpl final : public SNSService::Service {
     }
 
     Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
-    // ------------------------------------------------------------
-    // In this function, you are to write code that handles 
-    // receiving a message/post from a user, recording it in a file
-    // and then making it available on his/her follower's streams
-    // ------------------------------------------------------------
-        // * read message from stream
-
-        // * take username
-
-        // * find username entry in users table
-
-        // * set that username's TIMELINE mode variable to true (?)
-
-        // * for each follower in that user, write a message to their stream
-        //   (?) iff the stream is open (the follower is in TIMELINE mode)
-
-        // * repeat
-        // return Status::OK;
-        // -------(!)
-        
+    /*
+        We don't care about cache locallity given that we have to backup
+        users and messages to a datastore on (essentially) every message
+        so we're using heap memory where it makes coding convenient.
+    */
         while (true) {
+            // * read message from stream
             Message recv, send;
             while (stream->Read(&recv)) {
-
-                if (recv.msg() == "INIT") {
-                    std::unique_lock<std::mutex> lock(mtx);
-                    streams.push_back(stream);
-                    std::unique_lock<std::mutex> unlock(mtx);
-                }
+               // * take username
+               string uname = recv.username();
+               string rmsg = recv.msg();
+               if (rmsg == "INIT") {
+                    
+                   // * find username entry in users table
+                   mtx.lock();
+                   User* user = get_user_entry(uname);
+                   if (!user) {
+                       cout << "WHOOPS NO USER HERE! " << uname << '\n';// this would be v bad (!)
+                   } else {
+                        // * save stream in user table, set timeline mode to true
+                        user->set_stream(stream);
+                   }
+                   mtx.unlock();
+                   continue; // do not fwd init messages
+               }
 
                 cout << ">>>SERVER\n";
-                cout << "uname " << recv.username() << "\n";
-                cout << "recvd " << recv.msg();
+                cout << "uname " << uname << "\n";
+                cout << "recvd " << rmsg;
                 cout << "\n>>>\n";
+                string msg_to_send = "(" + uname + "): " + rmsg;
+                send.set_msg(msg_to_send);
 
-                send.set_msg(string("sent by ") + recv.username());
-                // stream->Write(send);
-             
-                for (int i = 0; i < streams.size(); i++) {
-                    std::unique_lock<std::mutex> lock(mtx);
-                    streams[i]->Write(send);
-                    std::unique_lock<std::mutex> unlock(mtx);
+                // * for each follower in that user, write a message to their stream
+                //   iff the stream is open (the follower is in TIMELINE mode)
+                mtx.lock();
+                for (int i = 0; i < users.size(); i++) {
+                    // * Check user name for follow (!)
+                    if (!users[i]->stream) {
+                        cout << "WHOOPS NO STREAM HERE FOR" << users[i]->username << "...yet?\n";
+                    } else {
+                        users[i]->stream->Write(send);
+                    }
                 }
+                mtx.unlock();
             }
-        }
-        // cout << ">>>SERVER OUT OF LOOP<<<\n";
-        // We don't hit this point until client disco
+        }   // * repeat
+        cout << ">>>SERVER OUT OF LOOP<<<\n"; // We don't hit this point until client disco
         return Status::OK;
     }
 
-    /* Testing streams */
-    vector<ServerReaderWriter<Message, Message>*> streams;
-    std::mutex mtx;
-
     /* User memory containers and functions */
     vector<User*> users; //(!) should exist in persistant storage
+    std::mutex mtx;
     // Returns the user entry for specific username, or null if none found
     User* get_user_entry(string uname) {
         for (int i = 0; i < users.size(); i++) {
