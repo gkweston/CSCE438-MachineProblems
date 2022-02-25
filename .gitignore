@@ -12,10 +12,10 @@
 /MP_1/MP1_GarrettWeston.zip
 
 /MP_2/notes.txt
-
 /MP_2/scratch.cpp
 /MP_2/a.out
 /MP_2/.vscode-server
+/MP_2/*.note
 
 # OS files and stuff
 .DS_Store
