@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+
 // #include "sns.grpc.pb.h"
 #include "tsd.h"
 
@@ -30,13 +31,15 @@ using csce438::Reply;
 using csce438::SNSService;
 using std::string;
 using std::vector;
+using std::ofstream;
+using std::ifstream;
 using std::cout;
 
 /* TODO
- * Message routing with a vector for following and followers
- * Time stamps & message formatting
+ * Display last 20 messages!!
  * Data store search: (!)data_store
  * USER_ALREADY case on Login
+ * Remove dev prints (!)
  */
 
 class SNSServiceImpl final : public SNSService::Service {
@@ -58,8 +61,8 @@ class SNSServiceImpl final : public SNSService::Service {
             return Status::OK;
         }
         // Copy following users
-        for (int i = 0; i < this_user->following_users.size(); i++) {
-            reply->add_following_users(this_user->following_users[i].c_str());
+        for (int i = 0; i < this_user->followers.size(); i++) {
+            reply->add_following_users(this_user->followers[i].c_str());
         }
         reply->set_msg(SUCCESS);
         return Status::OK;
@@ -74,6 +77,10 @@ class SNSServiceImpl final : public SNSService::Service {
         */
         string uname = request->username();
         string uname_to_follow = request->arguments(0);
+
+        // check if uname_to_follow is in following, if not add it
+        get_user_entry(uname)->push_following(uname_to_follow);
+
         // User is trying to follow themselves, which is done automatically on login
         if (uname_to_follow == uname) {
             reply->set_msg(FAILURE_ALREADY_EXISTS);
@@ -86,8 +93,8 @@ class SNSServiceImpl final : public SNSService::Service {
             return Status::OK;
         } 
         // Check if user is trying to follow a user they already follow
-        if (ufollow_entry->is_following(uname) == -1) {
-            ufollow_entry->following_users.push_back(uname);
+        if (ufollow_entry->is_follower(uname) == -1) {
+            ufollow_entry->followers.push_back(uname);
             reply->set_msg(SUCCESS);
             return Status::OK;    
         }
@@ -104,6 +111,9 @@ class SNSServiceImpl final : public SNSService::Service {
         */
         string uname = request->username();
         string unfollow_name = request->arguments(0);
+
+        // check if unfollow_name is in following, if so remove it
+        get_user_entry(uname)->pop_following(unfollow_name);
 
         // Check if user tries to unfollow themselves, which we prevent
         if (uname == unfollow_name) {
@@ -158,7 +168,6 @@ class SNSServiceImpl final : public SNSService::Service {
                string uname = recv.username();
                string rmsg = recv.msg();
                if (rmsg == "INIT") {
-                    
                    // * find username entry in users table
                    mtx.lock();
                    User* user = get_user_entry(uname);
@@ -176,18 +185,38 @@ class SNSServiceImpl final : public SNSService::Service {
                 cout << "uname " << uname << "\n";
                 cout << "recvd " << rmsg;
                 cout << "\n>>>\n";
-                string msg_to_send = "(" + uname + "): " + rmsg;
-                send.set_msg(msg_to_send);
+                // username(!)
+                // string msg_to_send = "(" + uname + "): " + rmsg;
+                // send.set_msg(msg_to_send);
+                // time(!)
+                // send.set_username(recv.username());
+                // send.set_msg(recv.msg());
+                // send.set_allocated_timestamp(recv.timestamp());
+                // Timestamp t = recv.timestamp();
+                // send.set_allocated_timestamp(&t);
+                
 
                 // * for each follower in that user, write a message to their stream
                 //   iff the stream is open (the follower is in TIMELINE mode)
+
+                /*
+                    We're using User::following vector for message routing as such
+                    When user A sends a message
+                      iterate through ALL users in user table
+                        check if they are following A, if so, forward message
+
+                    NOTE: User::following is different than the User::followers vector
+                */
                 mtx.lock();
                 for (int i = 0; i < users.size(); i++) {
-                    // * Check user name for follow (!)
-                    if (!users[i]->stream) {
-                        cout << "WHOOPS NO STREAM HERE FOR" << users[i]->username << "...yet?\n";
-                    } else {
-                        users[i]->stream->Write(send);
+                    // * Check user name for follow
+                    User* u = users[i];
+                    if (u->is_following(uname)) {
+                        if (u->stream) {
+                            // u->stream->Write(send);
+                            // Forward recv message
+                            u->stream->Write(recv);
+                        }
                     }
                 }
                 mtx.unlock();
@@ -209,9 +238,77 @@ class SNSServiceImpl final : public SNSService::Service {
         }
         return nullptr;
     }
-    bool read_users(string path);//(!)data_store
-    bool write_users(string path);//(!)data_store
+    // Would prefer to do IO to .json, but unsure if grading machine
+    // will have json.h --- this is a mess... move along! move along!
+    bool read_users(string path) {
+        string line;
+        ifstream f("datastore");
+        int i = 0;
+        User* u;
+        if (f.is_open()) {
+            while (getline(f, line)) {
+                // Remove '\n'
+                if (!line.empty() && line[line.length()-1] == '\n') {
+                    line.erase(line.length()-1);
+                }
+                // Remove trailing ,
+                if (!line.empty() && line[line.length()-1] == ',') {
+                    line.erase(line.length()-1);
+                }
+                if (i % 3 == 0) { //username
+                    // cout << line << endl;//(!)
+                    u = new User(line);
+                    users.push_back(u);
+                } else { //followers
+                    size_t idx = 0;
+                    string tok;
+                    while ((idx = line.find(",")) != string::npos) {
+                        tok = line.substr(0, idx);
+                        if (tok != u->username) {
+                            if (i % 3 == 1) {
+                                u->followers.push_back(tok);
+                            } else {
+                                u->following.push_back(tok);
+                            }
+                        }
+                        line.erase(0, idx + 1);
+                    }
+                    if (line != u->username) {
+                        if (i % 3 == 1) {
+                            u->followers.push_back(line);
+                        } else {
+                            u->following.push_back(line);
+                        }
+                    }
+
+                }
+                if (++i == 3) i = 0;
+            }
+        }
+    }
+    bool write_users(string path) {
+        // Lazymode. Just clear file, write out users vec.
+        ofstream f;
+        f.open("datastore", ofstream::out | ofstream::trunc);
+        for (int i = 0; i < users.size(); i++) {
+            User* u = users[i];
+            // Write name then \n
+            f << u->username << '\n';
+            // Write all followers delim by ','
+            for (int j = 0; j < u->followers.size(); j++) {
+                f << u->followers[j] << ',';
+            }
+            f << '\n';
+            // Write all following
+            for (int j = 0; j < u->following.size(); j++) {
+                f << u->following[j] << ',';
+            }
+            f << '\n';
+        }
+        f.close();
+    }
 };
+
 
 void RunServer(string port_no) {
     // ------------------------------------------------------------

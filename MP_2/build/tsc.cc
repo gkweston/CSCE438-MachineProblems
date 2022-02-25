@@ -2,12 +2,18 @@
 #include <iostream>
 #include <string>
 #include <unistd.h>
+#include <ctime>
+#include <google/protobuf/timestamp.pb.h>
+#include <google/protobuf/duration.pb.h>
+#include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
 #include <vector>
 #include "client.h"
 #include "sns.grpc.pb.h"
 #include <thread>
 
+using google::protobuf::util::TimeUtil;
+using google::protobuf::Timestamp;
 using csce438::SNSService;
 using csce438::Reply;
 using csce438::Request;
@@ -220,41 +226,39 @@ int main(int argc, char** argv) {
 }
 
 void Client::processTimeline() {
-
-    // * Dispatch a thread, or use gRPC native threading to displayPostMessage
-    //   from stream and display the last 10 messages from server
-    //   (AND)
-    // * Monitor stdin to getPostMessage from user
-    // * repeat
-
     // Send msg, get resp, repeat
     string uname = username;
 
-    ClientContext ctx;  //don't reuse?
+    ClientContext ctx;
     std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> stream (
         stub_->Timeline(&ctx)
     );
 
-    while (true) {//(!)(!)
-        // set timestamp(!)
+    while (true) {
         std::thread writer([&]() {
-            // * Init connection
+            // * Init connection, don't bother timestamping inits
             Message client_msg;
             client_msg.set_username(uname);
             client_msg.set_msg("INIT");
 
+            // All remaining messages are taken from stdin
             while (stream->Write(client_msg)) {
                 client_msg.set_msg(getPostMessage());
-                // set usname and stuff?
+                Timestamp t = Timestamp();
+                client_msg.release_timestamp();
+                client_msg.set_allocated_timestamp(&t);//(!)
             }
             stream->WritesDone();
         });
-
         std::thread reader([&]() {
             Message serv_msg;
             while (stream->Read(&serv_msg)) {
-                // displayPostMessage()
-                cout << serv_msg.msg();
+                // * Extract sender, msg, time
+                string post_user = serv_msg.username();
+                string post_msg = serv_msg.msg();
+                time_t post_time = TimeUtil::TimestampToTimeT(serv_msg.timestamp());
+                // * Display last 20 messages (!)
+                displayPostMessage(post_user, post_msg, post_time);
             }
         });
         reader.join();
