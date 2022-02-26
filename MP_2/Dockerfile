@@ -22,4 +22,4 @@ FROM csce438/mp2:build_env
 COPY ./.vscode-server /root/
 
 RUN mkdir /root/build
-COPY ./build /root/build/
+COPY ./src /root/src/
