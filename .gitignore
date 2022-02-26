@@ -16,6 +16,8 @@
 /MP_2/a.out
 /MP_2/.vscode-server
 /MP_2/*.note
+/MP_2/build/scratch.cpp
+
 
 # OS files and stuff
 .DS_Store
