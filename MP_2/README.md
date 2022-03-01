@@ -10,7 +10,7 @@ After ensuring Docker is properly installed, download these files via `git clone
     cd ${THIS_REPO}/MP_2/build_env
     docker build -t csce438/mp2:dev_env .
 
-This may take a while, but it will pull an amazonlinux container and install all project dependancies. Keep the `csce438/mp2:dev_env` container on hand as we will use Docker caching to quickly spin up dev containers. 
+This may take a while, but it will pull an amazonlinux image and install all project dependancies. Keep the `csce438/mp2:dev_env` image on hand as we will use Docker caching to quickly spin up dev containers. 
 
 ### Starting Docker container for development/testing
 Next spin up the dev container by running
