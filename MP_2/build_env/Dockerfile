@@ -1,3 +1,4 @@
+# csce438/mp2:dev_env
 # --------------------------- NOTES --------------------------------
 # Using an amazonlinux image, we'll provision with dependancies then
 # build Cmake and gRPC. Some notes are included for faster image
@@ -5,7 +6,7 @@
 # 
 # Toggle Cmake and gRPC sections then, from this directory, run:
 # 
-# `docker build -t csce438/mp2 .`
+# `docker build -t csce438/mp2:dev_env .`
 # 
 # ------------------------------------------------------------------
 FROM amazonlinux:latest
