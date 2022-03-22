@@ -1,4 +1,4 @@
-# csce438/mp2:dev_env
+# csce438/mp2:build_env
 # --------------------------- NOTES --------------------------------
 # Using an amazonlinux image, we'll provision with dependancies then
 # build Cmake and gRPC. Some notes are included for faster image
@@ -6,7 +6,7 @@
 # 
 # Toggle Cmake and gRPC sections then, from this directory, run:
 # 
-# `docker build -t csce438/mp2:dev_env .`
+# `docker build -t csce438/mp2:build_env .`
 # 
 # ------------------------------------------------------------------
 FROM amazonlinux:latest
@@ -52,15 +52,15 @@ RUN rm cmake-linux.sh
 
 # ------------ Adding gRPC and Protocol Buffers --------------------
 # (EITHER) Use this if you want to fetch grpc build files
-# -->
+# >>>
 RUN git clone --recurse-submodules -b v1.43.0 https://github.com/grpc/grpc
-# <--
+# <<<
 
 # (OR) Use this if you have grpc build file in this directory
-# -->
+# >>>
 # RUN mkdir grpc
 # ADD ./grpc /grpc 
-# <--
+# <<<
 # ------------------------------------------------------------------
 
 # Installing gRPC and Protocol Buffers

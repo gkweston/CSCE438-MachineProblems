@@ -8,7 +8,7 @@ This project is intended for deployment on an amazonlinux environment with Googl
 After ensuring Docker is properly installed, download these files via `git clone` or some other means into your `$WORKING_DIR`. Then run:
     
     cd ${THIS_REPO}/MP_2/build_env
-    docker build -t csce438/mp2:dev_env .
+    docker build -t csce438/mp2:build_env .
 
 This may take a while, but it will pull an amazonlinux image and install all project dependancies. Keep the `csce438/mp2:dev_env` image on hand as we will use Docker caching to quickly spin up dev containers. 
 
@@ -42,7 +42,7 @@ If you wish to save project files to another directory, simply pass to relative/
 That's it! If anything is unclear, check any Dockerfile or shell script for documentation.
 
 ### Using your own environment 
-Follow gRPC and CMake installation from the [gRPC docs](https://grpc.io/docs/languages/cpp/quickstart/). With some understanding of Dockerfiles, you could similarly replicate the `csce438/mp2:dev_env` container build in `./build_env/Dockerfile`.
+Follow gRPC and CMake installation from the [gRPC docs](https://grpc.io/docs/languages/cpp/quickstart/). With some understanding of Dockerfiles, you could similarly replicate the `csce438/mp2:build_env` container build in `./build_env/Dockerfile`.
 
 ### Compilation
 Once you have a shell in the dev container run:
@@ -60,5 +60,6 @@ Client(s)
     
 
 ## Other
+A hackier step (than might be necessary) we're using is simply call `docker cp` on all our project and `vscode-server` files. This allows us to keep VSCode extensions on the non-persistant dev container. A cleaner way of doing this might be to mount host machine files to the remote, although as long as you're careful with the paths you give `[start|stop]_dev_env.sh`, this works just fine.
 
-<font size="1">have fun!</font>
+<font size="1">...have fun!</font>
