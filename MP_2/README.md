@@ -64,9 +64,6 @@ This may take a while (especially if it's a fresh make). Then start the server:
 Client(s)
 
     ./tsc -h <host> -p <port> -u <username>
-    
-## Succinct System Design
-https://docs.google.com/viewer?url=https://raw.githubusercontent.com/gkweston/CSCE438-MachineProblems/main/MP_2/MP2%20Design.pdf
 
 ## Other
 A hackier step (than might be necessary) we're using is `docker cp`-ing all our project and `.vscode-server` files. This allows us to keep VSCode extensions on the non-persistant dev container.
