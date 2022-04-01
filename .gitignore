@@ -14,6 +14,7 @@
 **/.DS_Store
 **/.vscode*/
 **/.bash_history
+**/*.swp
 
 # PII and other potentially sensitive data
 **/.ssh/
