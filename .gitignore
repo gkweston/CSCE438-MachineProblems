@@ -1,24 +1,28 @@
-# cpp and c compilation files
-*.out
-*.o
-*.zip
+# Generic files to ignore 
+**/*.out
+**/*.o
+**/*.zip
+**/*.xlsx
+
+# Personal notes and tracking files
+**/notes*
+**/*.note
+**/scratch*
+**/scratch/
+
+# OS and Software Files
+**/.DS_Store
+**/.vscode*/
+**/.bash_history
+
+# PII and other potentially sensitive data
+**/.ssh/
+**/.gnupg/
+**/.gitconfig/
 
 # test and dev files
-/MP_1/normal_test_cases.xlsx
-/MP_1/notes.txt
-/MP_1/scratch.cpp
 /MP_1/tclient
 /MP_1/tserver
-/MP_1/MP1_GarrettWeston.zip
 
-/MP_2/notes.txt
-/MP_2/scratch.cpp
-/MP_2/a.out
-/MP_2/.vscode-server
-/MP_2/*.note
-/MP_2/build/scratch.cpp
+/MP_3/mp2solution
 
-
-# OS files and stuff
-.DS_Store
-*.note
