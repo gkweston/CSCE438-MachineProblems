@@ -1,5 +1,0 @@
-[user]
-	email = gkweston@tamu.edu
-	name = gkweston
-[credential]
-	helper = "!f() { /root/.vscode-server/bin/e18005f0f1b33c29e81d732535d8c0e47cafb0b5/node /tmp/vscode-remote-containers-10eb1920c9420eb5662ecdc3b5427120169cbfd1.js $*; }; f"
