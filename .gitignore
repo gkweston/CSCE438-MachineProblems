@@ -15,11 +15,12 @@
 **/.vscode*/
 **/.bash_history
 **/*.swp
+**/.cache/**
 
 # PII and other potentially sensitive data
 **/.ssh/
 **/.gnupg/
-**/.gitconfig/
+**/.gitconfig
 
 # test and dev files
 /MP_1/tclient
