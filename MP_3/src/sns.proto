@@ -36,33 +36,54 @@ import "google/protobuf/timestamp.proto";
 // The messenger service definition.
 service SNSService{
 
-  rpc Login (Request) returns (Reply) {}
-  rpc List (Request) returns (ListReply) {}
-  rpc Follow (Request) returns (Reply) {}
-  rpc UnFollow (Request) returns (Reply) {}
-  // Bidirectional streaming RPC
-  rpc Timeline (stream Message) returns (stream Message) {} 
+	rpc Login (Request) returns (Reply) {}
+	rpc List (Request) returns (ListReply) {}
+	rpc Follow (Request) returns (Reply) {}
+	rpc UnFollow (Request) returns (Reply) {}
+	// Bidirectional streaming RPC
+	rpc Timeline (stream Message) returns (stream Message) {} 
 }
 
 message ListReply {
-  repeated string all_users = 1;
-  repeated string followers = 2;
+	repeated string all_users = 1;
+	repeated string followers = 2;
 }
 
 message Request {
-  string username = 1;
-  repeated string arguments = 2;
+	string username = 1;
+	repeated string arguments = 2;
 }
 
 message Reply {
-  string msg = 1;
+	string msg = 1;
 }
 
 message Message {
-  //Username who sent the message
-  string username = 1;
-  //Message from the user
-  string msg = 2;
-  //Time the message was sent
-  google.protobuf.Timestamp timestamp = 3;
+	//Username who sent the message
+	string username = 1;
+	//Message from the user
+	string msg = 2;
+	//Time the message was sent
+	google.protobuf.Timestamp timestamp = 3;
+}
+
+/* ------- MP3 Changes ------- */
+service SNSCoordinatorService {
+	rpc RegisterServer (Registration) returns (Reply) {}
+	rpc FetchAssignment (Request) returns (Assignment) {}
+}
+
+// For registering server w/ coordinator
+message Registration {
+	string sid = 1;
+	string hostname = 2;
+	string port = 3;
+	string type = 4;
+}
+
+// Assigns a client to a specific server cluster, active server
+message Assignment {
+	string sid = 1; // cluster SID
+	string hostname = 2;
+	string port = 3;
 }

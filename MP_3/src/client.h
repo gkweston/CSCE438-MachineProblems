@@ -17,6 +17,16 @@ enum IStatus
 };
 
 /*
+    IAssignment takes the data from Coordinator responses
+*/
+struct IAssignment {
+    grpc::Status grpc_status;
+    std::string cluster_sid;
+    std::string hostname;
+    std::string port;
+};
+
+/*
  * IReply structure is designed to be used for displaying the
  * result of the command that has been sent to the server.
  * For example, in the "processCommand" function, you should

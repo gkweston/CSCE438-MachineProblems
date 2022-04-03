@@ -12,8 +12,9 @@ Directory structuring for binaries (excluding sourcecode)
             ...
                 ...
 
-    Notes:
-        * All server/client IDs are assigned on execution (no uuidgen)
-        * Change tsc -> tsn_client
-        * Change tsd -> tsn_server
-    
+```
+Notes:
+    * All server/client IDs are assigned on execution (no uuidgen)
+    * Change tsc -> tsn_client
+    * Change tsd -> tsn_server
+```

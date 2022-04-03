@@ -1,9 +1,11 @@
 /*
 Diffs required:
 	Step 1.
-	* Assign enum for PRIMARY, SECONDARY at execution
+	* Add coordinator stub
+	* Send hostname, port info to coordinator on init
 
 	Step 2.
+	* Assign enum for PRIMARY, SECONDARY at execution
 	* Establish connection w/ coordinator, send HRTBT on this channel
 	* Create ./datastore/TYPE_ID/[context.data, user_timelines.data]
 	* Change IO to write properly to files
@@ -58,6 +60,7 @@ Diffs required:
 #include <grpc++/grpc++.h>
 
 #include "sns.grpc.pb.h"
+#include "coordinator.h"
 
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;
@@ -68,11 +71,16 @@ using grpc::ServerReader;
 using grpc::ServerReaderWriter;
 using grpc::ServerWriter;
 using grpc::Status;
+using grpc::ClientContext;
 using csce438::Message;
 using csce438::ListReply;
 using csce438::Request;
 using csce438::Reply;
 using csce438::SNSService;
+using csce438::Registration;
+using csce438::SNSCoordinatorService;
+
+#define DEFAULT_HOST (std::string("0.0.0.0"))
 
 struct Client {
 	std::string username;
@@ -241,12 +249,123 @@ class SNSServiceImpl final : public SNSService::Service {
 		c->connected = false;
 		return Status::OK;
 	}
+// ------->>>
+// REVERT START
+// Server encapsulation approach
+private:
+	std::string coordinator_addr;
+	std::string cluster_sid;
+	std::string port;
+	ServerType type_at_init;
 
+	std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_;
+
+	void RegisterWithCoordinator();
+public:
+	// Save sid, hostname, port and initialize coordinator RPC, then call the coordinator register function
+	SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t);
+// REVERT END
+// <<<-------
 };
 
-void RunServer(std::string port_no) {
-	std::string server_address = "0.0.0.0:"+port_no;
-	SNSServiceImpl service;
+// ------->>> 
+// REVERT START
+SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t) {
+	// Server descriptors
+	coordinator_addr = coord_addr;
+	port = p;
+	cluster_sid = sid;
+
+	// This may change as server(s) fault, but we'll track what this server was
+	// spun up as [PRIMARY|SECONDARY]
+	type_at_init = t;
+	
+	// Generate coordinator stub here so we can reuse
+	coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
+		SNSCoordinatorService::NewStub(
+			grpc::CreateChannel(
+				coordinator_addr, grpc::InsecureChannelCredentials()
+			)
+		)
+	);
+
+	// Send registration message
+	RegisterWithCoordinator();
+}
+
+void SNSServiceImpl::RegisterWithCoordinator() {
+	/* Register server w/ coordinator, add me to the routing table(s)! */
+
+	// Fill RPC metadata and reg msg
+	Registration reg;
+	reg.set_sid(cluster_sid);
+	reg.set_hostname(DEFAULT_HOST);
+	reg.set_port(port);
+
+	std::string t = "PRIMARY";
+	if (type_at_init == ServerType::SECONDARY);
+		t = "SECONDARY";
+	reg.set_type(t);
+
+	Reply repl;
+	ClientContext ctx;
+
+	// Dispatch registration RPC
+	Status stat = coord_stub_->RegisterServer(&ctx, reg, &repl);
+	if (!stat.ok())
+		std::cerr << "Server registration error for:\nsid=" << cluster_sid << "\ntype=" << type_at_init << "\n";
+	else
+		std::cout << repl.msg() << std::endl;//(!)
+	
+}
+
+// REVERT END
+// <<<-------
+
+// int RegisterWithCoordinator(std::string coordinator_addr, std::string port, std::string sid, ServerType type) {
+// 	/* Register server w/ coordinator, add me to the routing table(s)! */
+
+// 	// Generate a new coordinator stub
+// 	std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
+// 		SNSCoordinatorService::NewStub(
+// 			grpc::CreateChannel(
+// 				coordinator_addr, grpc::InsecureChannelCredentials()
+// 			)
+// 		)
+// 	);
+
+// 	// Fill out RPC metadata and registration message
+// 	Registration reg;
+// 	reg.set_sid(sid);
+// 	reg.set_hostname(DEFAULT_HOST);
+// 	reg.set_port(port);
+
+// 	std::string t = "PRIMARY";
+// 	if (type == ServerType::SECONDARY);
+// 		t = "SECONDARY";
+// 	reg.set_type(t);
+
+// 	Reply repl;
+// 	ClientContext ctx;
+
+// 	// Dispatch registration RPC
+// 	Status stat = coord_stub_->RegisterServer(&ctx, reg, &repl);
+// 	if (!stat.ok()) {
+// 		std::cerr << "Server registration error\n";//(!);
+// 		return -1;
+// 	}
+// 	std::cout << repl.msg() << std::endl;//(!)
+// 	return 1;
+// }
+// void RunServer(std::string port_no) {
+void RunServer(std::string coord_addr, std::string sid, std::string port_no, ServerType type) {
+	// Spin up server instance
+	std::string server_address = DEFAULT_HOST + ":" + port_no;
+	// ------->>>
+	// SNSServiceImpl service;
+	// OR
+	SNSServiceImpl service(coord_addr, port_no, sid, type);
+	// <<<-------
 
 	ServerBuilder builder;
 	builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
@@ -258,18 +377,43 @@ void RunServer(std::string port_no) {
 }
 
 int main(int argc, char** argv) {
+
+	/*
+	Simplified args:
+		-c <coordinatorIP>:<coordinatorPort>
+		-p <port>
+		-i <serverID>		should be a string of integers
+		-t <type>			[master|primary] or anything else to assign as secondary
+	*/
   
 	std::string port = "3010";
+	std::string coord;
+	std::string serverID;
+	ServerType type;
+
 	int opt = 0;
-	while ((opt = getopt(argc, argv, "p:")) != -1){
+	while ((opt = getopt(argc, argv, "c:p:i:t:")) != -1){
 		switch(opt) {
+			case 'c':
+				coord = optarg;
+				break;
 			case 'p':
-				port = optarg;break;
+				port = optarg;
+				break;
+			case 'i':
+				serverID = optarg;
+				break;
+			case 't':
+				type = parse_type(std::string(optarg));
+				break;
 			default:
-			std::cerr << "Invalid Command Line Argument\n";
+				std::cerr << "Invalid Command Line Argument\n";
 		}
 	}
-	RunServer(port);
+	
+	// RegisterWithCoordinator(coord, port, serverID, type);
+	// RunServer(port);
+	RunServer(coord, serverID, port, type);
 
 	return 0;
 }
