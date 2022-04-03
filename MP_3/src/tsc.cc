@@ -43,21 +43,21 @@ Message MakeMessage(const std::string& username, const std::string& msg) {
 
 class Client : public IClient {
 public:
-    Client(const std::string& hname, const std::string& uname, const std::string& p) {
-        coord_hostname = hname;
-        coord_port = p;
-        username = uname;       // Synonymous with CID, for now at least...
+    Client(const std::string& hname, const std::string& p, const std::string& cid) :
+    coord_hostname(hname), coord_port(p), username(cid) {
+
         active_hostname = "";
         active_port = "";
 
         // Instantiate coordinator stub here
         coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
-        SNSCoordinatorService::NewStub(
-            grpc::CreateChannel(
-                coord_hostname + ":" + coord_port, grpc::InsecureChannelCredentials()
+            SNSCoordinatorService::NewStub(
+                grpc::CreateChannel(
+                    //(!)simplify to hostname:port as all others
+                    coord_hostname + ":" + coord_port, grpc::InsecureChannelCredentials()
+                )
             )
-        )
-    );
+        );
     }
         
 protected:
@@ -74,10 +74,9 @@ private:
     std::string active_hostname;
     std::string active_port;
 
-    std::string username;
+    std::string username;       // synonym for CID, for now...
     
-    // You can have an instance of the client stub
-    // as a member variable.
+    // To be reused when we can
     std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_;
     std::unique_ptr<SNSService::Stub> active_stub_;
 
@@ -91,35 +90,6 @@ private:
     IReply UnFollow(const std::string& username2);
     void Timeline(const std::string& username);
 };
-
-int main(int argc, char** argv) {
-
-    std::string hostname = "localhost";
-    std::string username = "default";
-    std::string port = "3010";
-    int opt = 0;
-    while ((opt = getopt(argc, argv, "h:u:p:")) != -1){
-        switch(opt) {
-            case 'h':
-                hostname = optarg;
-                break;
-            case 'u':
-                username = optarg;
-                break;
-            case 'p':
-                port = optarg;
-                break;
-            default:
-                std::cerr << "Invalid Command Line Argument\n";
-        }
-    }
-
-    Client myc(hostname, username, port);
-    // You MUST invoke "run_client" function to start business logic
-    myc.run_client();
-
-    return 0;
-}
 
 int Client::connectTo()
 {
@@ -329,7 +299,7 @@ IReply Client::Login() {
     active_stub_ = std::unique_ptr<SNSService::Stub>(
         SNSService::NewStub(
             grpc::CreateChannel(
-                active_hostname + ":" + active_port, grpc::InsecureChannelCredentials()
+                active_hostname + ":" + active_port, grpc::InsecureChannelCredentials()//(!)simplify to hostname:port
             )
         )
     );
@@ -380,3 +350,38 @@ void Client::Timeline(const std::string& username) {
     reader.join();
 }
 
+int main(int argc, char** argv) {
+
+    /*
+    Simplified args:
+        -c <coordinatorIP>:<coordinatorPort>
+        -p port
+        -i <clientID>
+    */
+
+    std::string coord_host;
+    std::string coord_port;
+    std::string clientID = "3010";
+    int opt = 0;
+    while ((opt = getopt(argc, argv, "h:u:p:")) != -1){
+        switch(opt) {
+            case 'c':
+                coord_host = optarg;
+                break;
+            case 'p':
+                coord_port = optarg;
+                break;
+            case 'i':
+                clientID = optarg;
+                break;
+            default:
+                std::cerr << "Invalid Command Line Argument\n";
+        }
+    }
+
+    Client myc(coord_host, coord_port, clientID);
+    // You MUST invoke "run_client" function to start business logic
+    myc.run_client();
+
+    return 0;
+}
