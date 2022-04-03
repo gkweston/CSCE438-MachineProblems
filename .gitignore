@@ -1,6 +1,5 @@
 # Generic files to ignore 
 **/*.out
-**/*.o
 **/*.zip
 **/*.xlsx
 
@@ -23,13 +22,16 @@
 **/.gitconfig
 
 # test and dev files
-/MP_1/tclient
-/MP_1/tserver
-/MP_3/mp2_solution
-**/sns.grpc.pb.*
-**/sns.pb.*
-**/tsc
-**/tsd
+**/*.txt
+**/*.o
+**/*.pb.cc
+**/*.pb.h
+**/tsn_client
 **/tsn_server
 **/tsn_coordinator
 **/tsn_sync_service
+/MP_1/tclient
+/MP_1/tserver
+/MP_3/mp2_solution
+**/tsc
+**/tsd

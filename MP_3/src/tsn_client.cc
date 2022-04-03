@@ -363,7 +363,7 @@ int main(int argc, char** argv) {
     std::string coord_port;
     std::string clientID = "3010";
     int opt = 0;
-    while ((opt = getopt(argc, argv, "h:u:p:")) != -1){
+    while ((opt = getopt(argc, argv, "c:p:i:")) != -1){
         switch(opt) {
             case 'c':
                 coord_host = optarg;

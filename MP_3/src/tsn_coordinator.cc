@@ -72,6 +72,8 @@ class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
 
         // Reply
         server_routing_table.push_back(serv);
+        std::cout << "Registered server\nsid=" << serv.sid << "\nport=" << serv.port << "\ntype=" << reg->type() << "\n";//(!)
+
         std::string msg = "Server Registered";
         repl->set_msg(msg);
         return Status::OK;
@@ -84,12 +86,16 @@ class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
         int server_idx = find_server(target_sid);
 
         if (server_idx == -1) {
+            std::cout << "No server found for\ncid=" << cid << "target_sid="<<target_sid <<"\n";//(!)
+            std::cout <<"Cancelling...\n";//(!)
             // handle
             assigned->set_sid(std::string("NONE"));
             assigned->set_hostname(std::string("NONE"));
             assigned->set_port(std::string("NONE"));
+            return Status::CANCELLED;
         }
 
+        std::cout << "Server assigned for\ncid=" << cid << "sid=" << target_sid <<'\n';//(!)
         assigned->set_hostname(server_routing_table[server_idx].hostname);
         assigned->set_port(server_routing_table[server_idx].port);
         return Status::OK;

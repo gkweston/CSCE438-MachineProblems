@@ -271,6 +271,7 @@ public:
 // ------->>> 
 // REVERT START
 SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t) {
+	std::cout << "Constructor called!\n"; //(!)
 	// Server descriptors
 	coordinator_addr = coord_addr;
 	port = p;
@@ -302,9 +303,17 @@ void SNSServiceImpl::RegisterWithCoordinator() {
 	reg.set_hostname(DEFAULT_HOST);
 	reg.set_port(port);
 
-	std::string t = "PRIMARY";
-	if (type_at_init == ServerType::SECONDARY);
+	std::string t;
+	if (type_at_init == ServerType::PRIMARY) {
+		std::cout << "is prim" << '\n';//(!)
+		t = "PRIMARY";
+	} else if (type_at_init == ServerType::SECONDARY); {
+		std::cout << "is suckydary" << '\n';//(!)
 		t = "SECONDARY";
+	}
+
+	std::cout << "Sending as type=" << t << '\n';//(!)
+
 	reg.set_type(t);
 
 	Reply repl;
@@ -409,6 +418,11 @@ int main(int argc, char** argv) {
 			default:
 				std::cerr << "Invalid Command Line Argument\n";
 		}
+	}
+
+	if (type == ServerType::INVALID) {
+		std::cout << "Server type error\n";//(!)
+		return 1;
 	}
 	
 	// RegisterWithCoordinator(coord, port, serverID, type);
