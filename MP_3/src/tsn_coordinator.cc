@@ -34,7 +34,7 @@ using csce438::Assignment;
 using csce438::Registration;
 using csce438::SNSCoordinatorService;
 
-#define N_SERVERS (3)
+#define N_SERVERS (1)
 #define DEFAULT_HOST (std::string("0.0.0.0"))
 // ------->>> 
 // REVERT START
@@ -114,9 +114,12 @@ class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
     }
 
     Status FetchAssignment(ServerContext* ctx, const Request* req, Assignment* assigned) override {
+        
         // Take the req'ing cid and return the SID=(CID % 3)+1 from routing table
         int cid = std::stoi(req->username());
         std::string target_sid = std::to_string((cid % N_SERVERS) + 1);
+
+        std::cout << "Fetching assignment for\ncid=" << cid << "\ntarget_sid=" << target_sid << '\n';//(!)
 
         // (!) TODO prim and sec, for now just use prim (!)
         // Check routing tables for server
@@ -131,7 +134,7 @@ class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
             assigned->set_sid(std::string("NONE"));
             assigned->set_hostname(std::string("NONE"));
             assigned->set_port(std::string("NONE"));
-            return Status::CANCELLED;
+            return Status::OK;
         }
 
         std::cout << "Server assigned for\ncid=" << cid << "sid=" << target_sid <<'\n';//(!)

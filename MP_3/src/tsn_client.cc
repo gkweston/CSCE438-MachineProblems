@@ -43,8 +43,8 @@ Message MakeMessage(const std::string& username, const std::string& msg) {
 
 class Client : public IClient {
 public:
-    Client(const std::string& hname, const std::string& p, const std::string& cid) :
-    coord_hostname(hname), coord_port(p), username(cid) {
+    Client(const std::string& caddr, const std::string& p, const std::string& cid) :
+    coord_addr(caddr), port(p), username(cid) {
 
         active_hostname = "";
         active_port = "";
@@ -53,8 +53,7 @@ public:
         coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
             SNSCoordinatorService::NewStub(
                 grpc::CreateChannel(
-                    //(!)simplify to hostname:port as all others
-                    coord_hostname + ":" + coord_port, grpc::InsecureChannelCredentials()
+                    coord_addr, grpc::InsecureChannelCredentials()
                 )
             )
         );
@@ -66,8 +65,7 @@ protected:
     virtual void processTimeline();
 private:
     // Coordinator info
-    std::string coord_hostname;
-    std::string coord_port;
+    std::string coord_addr;
 
     // Active server info
     std::string cluster_sid;
@@ -75,6 +73,7 @@ private:
     std::string active_port;
 
     std::string username;       // synonym for CID, for now...
+    std::string port;
     
     // To be reused when we can
     std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_;
@@ -122,7 +121,14 @@ int Client::connectTo()
     //(!)
     IAssignment iAssigned = FetchAssignment();
     if (!iAssigned.grpc_status.ok()) {
-        std::cout << "Bad assignment\n";//(!)
+        std::cout << "gRPC FetchAssignment failed.\n";//(!)
+        std::cout << iAssigned.grpc_status.error_message() << '\n';//(!)
+        std::cout << iAssigned.grpc_status.error_code() << '\n';//(!)
+        return -1;
+    }
+
+    if (iAssigned.cluster_sid == "NONE" || iAssigned.hostname == "NONE" || iAssigned.port == "NONE") {
+        std::cout << "No server found to assign to client\n";//(!)
         return -1;
     }
 

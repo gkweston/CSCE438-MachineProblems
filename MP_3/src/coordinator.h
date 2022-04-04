@@ -21,14 +21,15 @@ ServerType parse_type(std::string type) {
 	);
     std::cout << "Input server type string=" << type << '\n';//(!)
 	if (type == "master" || type == "primary") {
-        std::cout << "Returning ServerType::PRIMARY\n"   ;//(!)
+        std::cout << "Returning ServerType::PRIMARY\n";//(!)
 		return ServerType::PRIMARY;
     } else if (type == "slave" || type == "secondary") {
-        std::cout << "Returning ServerType::SECONDARY\n"   ;//(!)
+        std::cout << "Returning ServerType::SECONDARY\n";//(!)
     	return ServerType::SECONDARY;
     } else {
-        std::cout << "Returning ServerType::INVALID\n"   ;//(!)
-        return ServerType::INVALID;
+        std::cout << "Returning ServerType::INVALID\n";//(!)
+        // return ServerType::INVALID;
+        return (ServerType)2;
     }
 }
 
@@ -53,4 +54,9 @@ struct ServerEntry {
     bool operator==(const ServerEntry& e1) const {
         return sid == e1.sid;
     }
+};
+
+struct SyncServiceEntry {
+    std::string PLACEHOLDER;
+    std::string sid;
 };
