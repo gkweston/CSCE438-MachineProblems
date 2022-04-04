@@ -36,28 +36,43 @@ using csce438::SNSCoordinatorService;
 
 #define N_SERVERS (3)
 #define DEFAULT_HOST (std::string("0.0.0.0"))
-
+// ------->>> 
+// REVERT START
 // Just one in this iteration, when we intro fault tolerance, we will have another
-std::vector<ServerEntry> server_routing_table;
+// std::vector<ServerEntry> primary_routing_table;
+// std::vector<ServerEntry> secondary_routing_table; //(!) placeholder for now
 
-int find_server(std::string sid) {
-    // for (int i = 0; i < server_routing_table.size(); ++i) {
-    //     if (server_routing_table[i].sid == sid) {
-    //         return i;
-    //     }
-    // }
-    // return -1;
-    int idx = 0;
-    for (ServerEntry e: server_routing_table) {
-        if (sid == e.sid) {
-            return idx;
-        }
-        ++idx;
-    }
-    return -1;
-}
+// int find_server(std::string sid, ServerType type) {
+//     // for (int i = 0; i < primary_routing_table.size(); ++i) {
+//     //     if (primary_routing_table[i].sid == sid) {
+//     //         return i;
+//     //     }
+//     // }
+//     // return -1;
+//     int idx = 0;
+//     if (type == ServerType::PRIMARY) {
+//         for (ServerEntry e: primary_routing_table) {
+//             if (sid == e.sid) {
+//                 return idx;
+//             }
+//             ++idx;
+//         }
+//     } else {
+//         for (ServerEntry e: secondary_routing_table) {
+//             if (sid == e.sid) {
+//                 return idx;
+//             }
+//             ++idx;
+//         }
+//     }
+//     return -1;    
+// }
+// <<<-------
+// REVERT END
 
 class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
+    
+    // Only gRPC functions defined inline
 
     Status RegisterServer(ServerContext* ctx, const Registration* reg, Reply* repl) override {
         // We'll recv this RPC on server startup and add to the appropo routing table
@@ -69,13 +84,32 @@ class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
         serv.port = reg->port();
         serv.type = parse_type(std::string(reg->type()));
         serv.status = ServerStatus::ACTIVE;
+// ------->>> 
+// REVERT START
+        // Check if this server already exists in the routing table, if so, replace with new entry
+        // int idx;
+        // if (serv.type == ServerType::PRIMARY) {
+        //     idx = find_primary_server(serv.sid);
+
+        //     if (idx < 0) { //DNE
+        //         primary_routing_table.push_back(serv);
+        //         std::cout << "Registered primary server\nsid=" << serv.sid << "\nport=" << serv.port << "\ntype=" << reg->type() << "\n";//(!)
+        //     } else { // Overwrite
+        //         primary_routing_table[idx] = serv;
+        //         std::cout << "Registered primary server overwrite\nsid=" << serv.sid << "\nport=" << serv.port << "\ntype=" << reg->type() << "\n";//(!)
+        //     }
+        // } else if (serv.type == ServerType::SECONDARY) {
+        //     std::cout << "Secondary server registration not finished...\n";
+        // }
 
         // Reply
-        server_routing_table.push_back(serv);
-        std::cout << "Registered server\nsid=" << serv.sid << "\nport=" << serv.port << "\ntype=" << reg->type() << "\n";//(!)
+        // primary_routing_table.push_back(serv);
+        // std::cout << "Registered server\nsid=" << serv.sid << "\nport=" << serv.port << "\ntype=" << reg->type() << "\n";//(!)
 
-        std::string msg = "Server Registered";
-        repl->set_msg(msg);
+        // std::string msg = "Server Registered";
+// <<<-------
+// REVERT END
+        repl->set_msg(registration_helper(serv));
         return Status::OK;
     }
 
@@ -83,7 +117,12 @@ class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
         // Take the req'ing cid and return the SID=(CID % 3)+1 from routing table
         int cid = std::stoi(req->username());
         std::string target_sid = std::to_string((cid % N_SERVERS) + 1);
-        int server_idx = find_server(target_sid);
+
+        // (!) TODO prim and sec, for now just use prim (!)
+        // Check routing tables for server
+        //      sid == target_sid && status == ACTIVE
+        int server_idx = find_primary_server(target_sid);
+        // (!) end TODO (!)
 
         if (server_idx == -1) {
             std::cout << "No server found for\ncid=" << cid << "target_sid="<<target_sid <<"\n";//(!)
@@ -96,11 +135,69 @@ class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
         }
 
         std::cout << "Server assigned for\ncid=" << cid << "sid=" << target_sid <<'\n';//(!)
-        assigned->set_hostname(server_routing_table[server_idx].hostname);
-        assigned->set_port(server_routing_table[server_idx].port);
+        assigned->set_hostname(primary_routing_table[server_idx].hostname);
+        assigned->set_port(primary_routing_table[server_idx].port);
         return Status::OK;
     }
+// ------->>> 
+// REVERT START
+private:
+    std::vector<ServerEntry> primary_routing_table;
+    std::vector<ServerEntry> secondary_routing_table;
+
+    int find_primary_server(std::string sid);
+    int find_secondary_server(std::string sid);
+    std::string registration_helper(const ServerEntry& e);
+    // int server_exists(const ServerEntry& e);
+// <<<-------
+// REVERT END
 };
+
+// ------->>> 
+// REVERT START
+std::string SNSCoordinatorServiceImpl::registration_helper(const ServerEntry& e) {
+    // Check if this server already exists in the routing table, if so, replace with new entry
+    int idx;
+    if (e.type == ServerType::PRIMARY) {
+        idx = find_primary_server(e.sid);
+
+        if (idx < 0) { //DNE
+            primary_routing_table.push_back(e);
+            std::cout << "Registered primary server\nsid=" << e.sid << "\nport=" << e.port << "\ntype=PRIMARY" << "\n";//(!)
+        } else { // Overwrite
+            primary_routing_table[idx] = e;
+            std::cout << "Registered primary server overwrite\nsid=" << e.sid << "\nport=" << e.port << "\ntype=PRIMARY" << "\n";//(!)
+        }
+    } else if (e.type == ServerType::SECONDARY) {
+        std::cout << "Secondary server registration not finished...\n";
+    }
+    return std::string("Server Registered");
+}
+
+int SNSCoordinatorServiceImpl::find_primary_server(std::string sid) {
+    // For now we return the index of the server or -1
+    int idx = 0;
+    for (ServerEntry e: primary_routing_table) {
+        if (sid == e.sid) {
+            return idx;
+        }
+        ++idx;
+    }
+    return -1;
+}
+int SNSCoordinatorServiceImpl::find_secondary_server(std::string sid) {
+    // For now we return the index of the server or -1
+    int idx = 0;
+    for (ServerEntry e: secondary_routing_table) {
+        if (sid == e.sid) {
+            return idx;
+        }
+        ++idx;
+    }
+    return -1;
+}
+// <<<-------
+// REVERT END
 
 void RunServer(std::string port) {
     std::string addr = DEFAULT_HOST + ":" + port;
@@ -116,6 +213,18 @@ void RunServer(std::string port) {
 }
 
 int main(int argc, char** argv) {
+
+    /*
+    Simplified args:
+        -p <coordinatorPort>
+    */
+
+    if (argc == 1) {//(!)
+        std::cout << "Calling convention for coordinator:\n\n";
+        std::cout << "./tsn_coordinator -p <port>\n\n";
+        return 0;
+    }
+
     std::string port = "3010";
     int opt = 0;
     while ((opt = getopt(argc, argv, "p:")) != -1) {

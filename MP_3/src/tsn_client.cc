@@ -355,9 +355,14 @@ int main(int argc, char** argv) {
     /*
     Simplified args:
         -c <coordinatorIP>:<coordinatorPort>
-        -p port
+        -p <port>
         -i <clientID>
     */
+    if (argc == 1) {//(!)
+        std::cout << "Calling convention for client:\n\n";
+        std::cout << "./tsn_client -c <coordIP>:<coordPort> -p <clientPort> -i <clientID>\n\n";
+        return 0;
+    }
 
     std::string coord_host;
     std::string coord_port;

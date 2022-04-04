@@ -303,6 +303,7 @@ void SNSServiceImpl::RegisterWithCoordinator() {
 	reg.set_hostname(DEFAULT_HOST);
 	reg.set_port(port);
 
+	/*
 	std::string t;
 	if (type_at_init == ServerType::PRIMARY) {
 		std::cout << "is prim" << '\n';//(!)
@@ -311,10 +312,12 @@ void SNSServiceImpl::RegisterWithCoordinator() {
 		std::cout << "is suckydary" << '\n';//(!)
 		t = "SECONDARY";
 	}
-
 	std::cout << "Sending as type=" << t << '\n';//(!)
-
 	reg.set_type(t);
+	*/
+	std::string server_type_str = type_to_string(type_at_init);
+	std::cout << "Registering as type=" << server_type_str << '\n';//(!)
+	reg.set_type(server_type_str);
 
 	Reply repl;
 	ClientContext ctx;
@@ -394,6 +397,11 @@ int main(int argc, char** argv) {
 		-i <serverID>		should be a string of integers
 		-t <type>			[master|primary] or anything else to assign as secondary
 	*/
+	if (argc == 1) { //(!)
+		std::cout << "Calling convention for server:\n\n";
+		std::cout << "./tsn_server -c <coordIP>:<coordPort> -p <serverPort> -i <serverID> -t <serverType>\n\n";
+		return 0;
+	}
   
 	std::string port = "3010";
 	std::string coord;
