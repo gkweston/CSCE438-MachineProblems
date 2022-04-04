@@ -29,7 +29,6 @@ using csce438::SNSService;
 using csce438::Assignment;
 using csce438::SNSCoordinatorService;
 
-
 Message MakeMessage(const std::string& username, const std::string& msg) {
     Message m;
     m.set_username(username);
@@ -81,7 +80,10 @@ private:
 
     // Coordinator RPCs
     IAssignment FetchAssignment();
-    
+
+    // Helper
+    IStatus parse_comm_status(std::string s);
+
     // Active server RPCs
     IReply Login();
     IReply List();
@@ -93,32 +95,7 @@ private:
 int Client::connectTo()
 {
 
-    /* (*)
-    Change this to take
-        Coordinator Socket
-        Issue rpc FetchAssignment
-        Issue Login on assigned sock
-    */
-
-    // (*) Issue this to Coordinator
-    // std::string login_info = hostname + ":" + port;
-    // stub_ = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(
-    //            grpc::CreateChannel(
-    //                 login_info, grpc::InsecureChannelCredentials())));
-
-    // New coordinator stub instance - in constructor
-    // std::string coord_login_info = coord_hostname + ":" + coord_port;
-    // coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
-    //     SNSCoordinatorService::NewStub(
-    //         grpc::CreateChannel(
-    //             coord_login_info, grpc::InsecureChannelCredentials()
-    //         )
-    //     )
-    // );
-
-    // (*) Get intermediary response with assigned hostname:port
-    // Get active server assignment from coordinator
-    //(!)
+    // Get assigned server from coordinator
     IAssignment iAssigned = FetchAssignment();
     if (!iAssigned.grpc_status.ok()) {
         std::cout << "gRPC FetchAssignment failed.\n";//(!)
@@ -131,22 +108,8 @@ int Client::connectTo()
         std::cout << "No server found to assign to client\n";//(!)
         return -1;
     }
-
-    // Unpack assigned active server info - we're doing this in FetchAssignment
-    // active_hostname = iAssigned.hostname;
-    // active_port = iAssigned.port;
-    // std::string active_login_info = active_hostname + ":" + active_port;
-
-    // (*) New stub instance for the assigned active server
-    // active_stub_ = std::unique_ptr<SNSService::Stub>(
-    //     SNSService::NewStub(
-    //         grpc::CreateChannel(
-    //             active_login_info, grpc::InsecureChannelCredentials()
-    //         )
-    //     )
-    // );
     
-    // (*) Issue Login on assigned hostname:port
+    // Login to assigned server
     IReply ire = Login();
     if(!ire.grpc_status.ok()) {
         std::cout << "Bad login\n";//(!)
@@ -254,18 +217,10 @@ IReply Client::Follow(const std::string& username2) {
     ClientContext context;
 
     Status status = active_stub_->Follow(&context, request, &reply);
-    IReply ire; ire.grpc_status = status;
-    if (reply.msg() == "unkown user name") {
-        ire.comm_status = FAILURE_INVALID_USERNAME;
-    } else if (reply.msg() == "unknown follower username") {
-        ire.comm_status = FAILURE_INVALID_USERNAME;
-    } else if (reply.msg() == "you have already joined") {
-        ire.comm_status = FAILURE_ALREADY_EXISTS;
-    } else if (reply.msg() == "Follow Successful") {
-        ire.comm_status = SUCCESS;
-    } else {
-        ire.comm_status = FAILURE_UNKNOWN;
-    }
+    IReply ire;
+    ire.grpc_status = status;
+    ire.comm_status = parse_comm_status(reply.msg());
+
     return ire;
 }
 
@@ -282,17 +237,24 @@ IReply Client::UnFollow(const std::string& username2) {
     Status status = active_stub_->UnFollow(&context, request, &reply);
     IReply ire;
     ire.grpc_status = status;
-    if (reply.msg() == "unknown follower username") {
-        ire.comm_status = FAILURE_INVALID_USERNAME;
-    } else if (reply.msg() == "you are not follower") {
-        ire.comm_status = FAILURE_INVALID_USERNAME;
-    } else if (reply.msg() == "UnFollow Successful") {
-        ire.comm_status = SUCCESS;
-    } else {
-        ire.comm_status = FAILURE_UNKNOWN;
-    }
-
+    ire.comm_status = parse_comm_status(reply.msg());
     return ire;
+}
+
+IStatus Client::parse_comm_status(std::string server_msg) {
+    if (server_msg == "SUCCESS") {
+        return IStatus::SUCCESS;
+    } else if (server_msg == "FAILURE_ALREADY_EXISTS") {
+        return IStatus::FAILURE_ALREADY_EXISTS;
+    } else if (server_msg == "FAILURE_NOT_EXISTS") {
+        return IStatus::FAILURE_NOT_EXISTS;
+    } else if (server_msg == "FAILURE_INVALID_USERNAME") {
+        return IStatus::FAILURE_INVALID_USERNAME;
+    } else if (server_msg == "FAILURE_INVALID") {
+        return IStatus::FAILURE_INVALID;
+    } else {
+        return IStatus::FAILURE_UNKNOWN;
+    }
 }
 
 IReply Client::Login() {
@@ -314,15 +276,15 @@ IReply Client::Login() {
 
     IReply ire;
     ire.grpc_status = status;
-    if (reply.msg() == "you have already joined") {
-        ire.comm_status = FAILURE_ALREADY_EXISTS;
-    } else {
-        ire.comm_status = SUCCESS;
-    }
+    ire.comm_status = parse_comm_status(reply.msg());
     return ire;
 }
 
 void Client::Timeline(const std::string& username) {
+    /* (!) TODO (!)
+        Add screen refresh, CLEARSCREEN and render all buffered messages such as in last MP
+        (!)     (!)
+    */
     ClientContext context;
 
     std::shared_ptr<ClientReaderWriter<Message, Message>> stream(

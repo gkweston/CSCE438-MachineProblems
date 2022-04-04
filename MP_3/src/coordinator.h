@@ -50,13 +50,8 @@ struct ServerEntry {
     std::string port;
     enum ServerStatus status;
     enum ServerType type;
-    
+        
     bool operator==(const ServerEntry& e1) const {
         return sid == e1.sid;
     }
-};
-
-struct SyncServiceEntry {
-    std::string PLACEHOLDER;
-    std::string sid;
 };

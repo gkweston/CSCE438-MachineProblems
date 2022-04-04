@@ -81,6 +81,12 @@ using csce438::Registration;
 using csce438::SNSCoordinatorService;
 
 #define DEFAULT_HOST (std::string("0.0.0.0"))
+#define SUCCESS 					("SUCCESS")
+#define FAILURE_ALREADY_EXISTS 		("FAILURE_ALREADY_EXISTS")
+#define FAILURE_NOT_EXISTS 			("FAILURE_NOT_EXISTS")
+#define FAILURE_INVALID_USERNAME 	("FAILURE_INVALID_USERNAME")
+#define FAILURE_INVALID 			("FAILURE_INVALID")
+#define FAILURE_UNKNOWN 			("FAILURE_UNKNOWN")
 
 struct Client {
 	std::string username;
@@ -128,17 +134,17 @@ class SNSServiceImpl final : public SNSService::Service {
 		std::string username2 = request->arguments(0);
 		int join_index = find_user(username2);
 		if(join_index < 0 || username1 == username2)
-			reply->set_msg("Join Failed -- Invalid Username");
+			reply->set_msg(FAILURE_INVALID_USERNAME);
 		else{
 			Client *user1 = &client_db[find_user(username1)];
 			Client *user2 = &client_db[join_index];
 			if(std::find(user1->client_following.begin(), user1->client_following.end(), user2) != user1->client_following.end()){
-				reply->set_msg("Join Failed -- Already Following User");
+				reply->set_msg(FAILURE_ALREADY_EXISTS);//(!)"Join Failed -- Already Following User"
 				return Status::OK;
 			}
 			user1->client_following.push_back(user2);
 			user2->client_followers.push_back(user1);
-			reply->set_msg("Join Successful");
+			reply->set_msg(SUCCESS);
 		}
 		return Status::OK; 
 	}
@@ -148,17 +154,17 @@ class SNSServiceImpl final : public SNSService::Service {
 		std::string username2 = request->arguments(0);
 		int leave_index = find_user(username2);
 		if(leave_index < 0 || username1 == username2)
-			reply->set_msg("Leave Failed -- Invalid Username");
+			reply->set_msg(FAILURE_INVALID_USERNAME);
 		else{
 			Client *user1 = &client_db[find_user(username1)];
 			Client *user2 = &client_db[leave_index];
 			if(std::find(user1->client_following.begin(), user1->client_following.end(), user2) == user1->client_following.end()){
-				reply->set_msg("Leave Failed -- Not Following User");
+				reply->set_msg(FAILURE_NOT_EXISTS);//(!)"Leave Failed -- Not Following User"
 				return Status::OK;
 			}
 			user1->client_following.erase(find(user1->client_following.begin(), user1->client_following.end(), user2)); 
 			user2->client_followers.erase(find(user2->client_followers.begin(), user2->client_followers.end(), user1));
-			reply->set_msg("Leave Successful");
+			reply->set_msg(SUCCESS);
 		}
 		return Status::OK;
 	}
@@ -170,12 +176,12 @@ class SNSServiceImpl final : public SNSService::Service {
 		if(user_index < 0){
 			c.username = username;
 			client_db.push_back(c);
-			reply->set_msg("Login Successful!");
+			reply->set_msg(SUCCESS);
 		}
 		else{ 
 			Client *user = &client_db[user_index];
 			if(user->connected)
-				reply->set_msg("Invalid Username");
+				reply->set_msg(FAILURE_INVALID_USERNAME);
 			else{
 				std::string msg = "Welcome Back " + user->username;
 				reply->set_msg(msg);
@@ -249,9 +255,7 @@ class SNSServiceImpl final : public SNSService::Service {
 		c->connected = false;
 		return Status::OK;
 	}
-// ------->>>
-// REVERT START
-// Server encapsulation approach
+
 private:
 	std::string coordinator_addr;
 	std::string cluster_sid;
@@ -264,14 +268,9 @@ private:
 public:
 	// Save sid, hostname, port and initialize coordinator RPC, then call the coordinator register function
 	SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t);
-// REVERT END
-// <<<-------
 };
 
-// ------->>> 
-// REVERT START
 SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t) {
-	std::cout << "Constructor called!\n"; //(!)
 	// Server descriptors
 	coordinator_addr = coord_addr;
 	port = p;
@@ -293,7 +292,6 @@ SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::strin
 	// Send registration message
 	RegisterWithCoordinator();
 }
-
 void SNSServiceImpl::RegisterWithCoordinator() {
 	/* Register server w/ coordinator, add me to the routing table(s)! */
 
@@ -302,19 +300,7 @@ void SNSServiceImpl::RegisterWithCoordinator() {
 	reg.set_sid(cluster_sid);
 	reg.set_hostname(DEFAULT_HOST);
 	reg.set_port(port);
-
-	/*
-	std::string t;
-	if (type_at_init == ServerType::PRIMARY) {
-		std::cout << "is prim" << '\n';//(!)
-		t = "PRIMARY";
-	} else if (type_at_init == ServerType::SECONDARY); {
-		std::cout << "is suckydary" << '\n';//(!)
-		t = "SECONDARY";
-	}
-	std::cout << "Sending as type=" << t << '\n';//(!)
-	reg.set_type(t);
-	*/
+	
 	std::string server_type_str = type_to_string(type_at_init);
 	std::cout << "Registering as type=" << server_type_str << '\n';//(!)
 	reg.set_type(server_type_str);
@@ -331,45 +317,6 @@ void SNSServiceImpl::RegisterWithCoordinator() {
 	
 }
 
-// REVERT END
-// <<<-------
-
-// int RegisterWithCoordinator(std::string coordinator_addr, std::string port, std::string sid, ServerType type) {
-// 	/* Register server w/ coordinator, add me to the routing table(s)! */
-
-// 	// Generate a new coordinator stub
-// 	std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
-// 		SNSCoordinatorService::NewStub(
-// 			grpc::CreateChannel(
-// 				coordinator_addr, grpc::InsecureChannelCredentials()
-// 			)
-// 		)
-// 	);
-
-// 	// Fill out RPC metadata and registration message
-// 	Registration reg;
-// 	reg.set_sid(sid);
-// 	reg.set_hostname(DEFAULT_HOST);
-// 	reg.set_port(port);
-
-// 	std::string t = "PRIMARY";
-// 	if (type == ServerType::SECONDARY);
-// 		t = "SECONDARY";
-// 	reg.set_type(t);
-
-// 	Reply repl;
-// 	ClientContext ctx;
-
-// 	// Dispatch registration RPC
-// 	Status stat = coord_stub_->RegisterServer(&ctx, reg, &repl);
-// 	if (!stat.ok()) {
-// 		std::cerr << "Server registration error\n";//(!);
-// 		return -1;
-// 	}
-// 	std::cout << repl.msg() << std::endl;//(!)
-// 	return 1;
-// }
-// void RunServer(std::string port_no) {
 void RunServer(std::string coord_addr, std::string sid, std::string port_no, ServerType type) {
 	// Spin up server instance
 	std::string server_address = DEFAULT_HOST + ":" + port_no;
@@ -433,9 +380,6 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 	
-	// RegisterWithCoordinator(coord, port, serverID, type);
-	// RunServer(port);
 	RunServer(coord, serverID, port, type);
-
 	return 0;
 }
