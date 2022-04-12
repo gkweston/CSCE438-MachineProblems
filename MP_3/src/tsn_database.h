@@ -1,15 +1,27 @@
 /*
+    Database schema
+    
+    datastore/
+	$(CLUSTER_ID}_datastore/
+		${SERVER_TYPE}/
+			${CID}/
+				timeline.data
+				sent_messages.data
+				following.data
+*/
+
+/*
     We need an interface for doing some database operations
 
     Datastore will comprise of 3 files
 
-    ${CID}_timeline.data:
+    ${CID}/timeline.data:
         server_flag | secondary_flag | TIME | CID | MSG
 
-    ${CID}_sent_messages.data:
+    ${CID}/sent_messages.data:
         sync_flag | secondary_flag | TIME | CID | MSG
 
-    ${CID}_following.data
+    ${CID}/following.data
         CID
 
     sync_flag:
@@ -135,20 +147,30 @@ Message entry_string_to_grpc_message(std::string entry_str) {
 
 namespace SyncService {
 
-    // sync flag is always first flat
-    bool sync_flag = true
-    
+    // sync flag is always first flag in ${CID}_set_messages.data
+    bool flag_idx = true
+
     std::vector<Message> check_update(std::string fname) {
+
+        // (!) fname should include *_set_messages.data
+
+        /*
+            Get new messages sent by user corresponding to fname
+
+            Only taking fname (not cid) here allows the server/service of whatever
+            type to iterate all CIDs and generate fnames to check updates from
+        */
         std::vector<Message> new_messages;
 
         // * Get file diff lines
-        std::vector<std::string> file_diffs = get_file_diffs(fname, sync_flag);
+        std::vector<std::string> file_diffs = get_file_diffs(fname, flag_idx);
+        size_t n_diffs = file_diffs.size();
         // * If no diffs, return empty vec
-        if (file_diffs.size() == 0) {
+        if (n_diffs == 0) {
             return new_messages;
         }
         // * For each file diff line, generate a gRPC Message and add to vec
-        for (int i = 0; i < file_diffs.size(); ++i) {
+        for (int i = 0; i < n_diffs; ++i) {
             if (file_diffs[i].size() == 0) {
                 continue;
             }
@@ -162,7 +184,75 @@ namespace SyncService {
         return new_messages;
     }
 
-} // end namespace SyncService
+}   // end namespace SyncService
+
+namespace PrimaryServer {
+
+    // primary flag is always first flag ${CID}_timeline.data
+    bool flag_idx = true;
+
+    std::vector<Message> check_update(std::string fname) {
+
+        // (!) fname should inclue *_timeline.dat
+
+        /*
+            Get new messages on users timeline corresponding to fname
+
+            Only taking fname (not cid) here allows the server/service of whatever
+            type to iterate all CIDs and generate fnames to check updates from
+        */
+        std::vector<Message> new_messages;
+
+        // * Get file diff liens
+        std::vector<std::string> file_diffs = get_file_diffs(fname, flag_idx);
+        // * If no diffs, return empty vec
+        size_t n_diffs = file_diffs.size();
+        if (n_diffs == 0) {
+            return new_messages;
+        }
+        // * For each file diff line, generate a gRPC Message and add to vec
+        for (int i = 0; i < n_diffs; ++i) {
+            if (file_diffs[i].size() == 0) {
+                continue;
+            }
+
+            Message new_msg = entry_string_to_grpc_message(file_diffs[i]);
+            if (new_msg.msg() == "ERROR") {
+                continue;
+            }
+            new_messages.push_back(new_msg);
+        }
+        return new_messages;
+    }
+
+
+}   // end namespace PrimaryServer
+
+namespace SecondaryServer {
+
+    // secondary flag is always second in ${CID}/set_messages.data, ${CID}/timeline.data
+    bool flag_idx = false;
+
+    std::vector<std::string> check_update(std::string fname) {
+        /*
+            Get lines, where secondary_flag=1, written in:
+                primary/${CID}/set_messages.data
+                primary/${CID}/timeline.data and
+            and write to
+                secondary/${CID}/set_messages.data
+                secondary${CID}/timeline.data and
+
+            Flip all secondary_flag=1 to 0 when this data
+        */
+
+        // (!)(!)(!) Maybe it makes things simpler to just stat() these files, then copy ALL
+        // without writing so:
+        // A. We don't necessarily need to acquire lock to update secondary files
+        // B. Our get file_diffs method is simplified because those files only have 1 flag
+        // C. We don't need to add a flag to the ${CID}/following.data files
+    }
+
+}   // end namespace SecondaryServer
 
 // namespace SyncService {
 
