@@ -54,7 +54,6 @@ std::vector<Message> read_timeline_data(std::string fname) {
     // Parse timeline datastore file into a vector of grpc Messages
     std::vector<Message> messages;
     std::string line;
-    std::vector<std::string> newest_twenty;
     std::ifstream in_stream(fname);
     // Parse input file
     while(getline(in_stream, line)){
