@@ -2,12 +2,13 @@
     Database schema
     
     datastore/
-	$(CLUSTER_ID}_datastore/
-		${SERVER_TYPE}/
-			${CID}/
-				timeline.data
-				sent_messages.data
-				following.data
+        $(CLUSTER_ID}/
+            ${SERVER_TYPE}/
+                clients.data
+                ${CID}/
+                    timeline.data
+                    sent_messages.data
+                    following.data
 */
 
 /*
@@ -84,17 +85,12 @@ std::vector<std::string> split_string(std::string s, std::string delim=FILE_DELI
     return parts;
 }
 
-std::vector<std::string> get_file_diffs(std::string fname, bool is_first_flag) {
+std::vector<std::string> get_file_diffs(std::string fname) {
     
     /*
     Read in user data, anywhere we see sync_flag=1 we'll add this
     line to a vector and return the vector. Overwrite this to sync_flag=0
     */
-
-    // is_first_flag is always set in the namespace which calls this function
-
-    // Get the index of the relevant flag
-    int idx = (is_first_flag) ? 0 : (FILE_DELIM.size() + 1);
 
     std::string line;
     std::vector<std::string> diffd_entries;
@@ -104,10 +100,9 @@ std::vector<std::string> get_file_diffs(std::string fname, bool is_first_flag) {
     std::ofstream tmp_stream(fname + std::string(".tmp"));
     
     while( getline(data_stream, line) ) {
-        // * if syncflag=1, set syncflag=0, add this line to a vector
-        if (line[idx] == '1') {
-            line[idx] = '0';
-            // line.replace(0, 1, "0");
+        // * if flag=1, set flag=0, add this line to a vector
+        if (line[0] == '1') {
+            line[0] = '0';
             diffd_entries.push_back(line);
         }
         // * Write entry to a tempfile
@@ -131,6 +126,7 @@ Message entry_string_to_grpc_message(std::string entry_str) {
 
     Message msg
     if (parts.size() != 5) {
+        std::cout << "entry to gRPC ERR\n";//(!)
         msg.set_msg("ERROR");
         return msg;
     }
@@ -147,9 +143,6 @@ Message entry_string_to_grpc_message(std::string entry_str) {
 
 namespace SyncService {
 
-    // sync flag is always first flag in ${CID}_set_messages.data
-    bool flag_idx = true
-
     std::vector<Message> check_update(std::string fname) {
 
         // (!) fname should include *_set_messages.data
@@ -163,7 +156,7 @@ namespace SyncService {
         std::vector<Message> new_messages;
 
         // * Get file diff lines
-        std::vector<std::string> file_diffs = get_file_diffs(fname, flag_idx);
+        std::vector<std::string> file_diffs = get_file_diffs(fname);
         size_t n_diffs = file_diffs.size();
         // * If no diffs, return empty vec
         if (n_diffs == 0) {
@@ -187,10 +180,7 @@ namespace SyncService {
 }   // end namespace SyncService
 
 namespace PrimaryServer {
-
-    // primary flag is always first flag ${CID}_timeline.data
-    bool flag_idx = true;
-
+    
     std::vector<Message> check_update(std::string fname) {
 
         // (!) fname should inclue *_timeline.dat
@@ -204,7 +194,7 @@ namespace PrimaryServer {
         std::vector<Message> new_messages;
 
         // * Get file diff liens
-        std::vector<std::string> file_diffs = get_file_diffs(fname, flag_idx);
+        std::vector<std::string> file_diffs = get_file_diffs(fname);
         // * If no diffs, return empty vec
         size_t n_diffs = file_diffs.size();
         if (n_diffs == 0) {
@@ -254,6 +244,8 @@ namespace SecondaryServer {
 
 }   // end namespace SecondaryServer
 
+
+// (!)(!)(!)(!) vvv
 // namespace SyncService {
 
 //     struct SentMessageEntry {

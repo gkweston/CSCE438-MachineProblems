@@ -68,17 +68,24 @@ message Message {
 }
 
 /* ------- MP3 Changes ------- */
+// --- Coordinator stuff
 service SNSCoordinatorService {
+	// Save this server in coordinator routing table
 	rpc RegisterServer (Registration) returns (Reply) {}
+	// Get the client assignment so they can comm w/ server
 	rpc FetchAssignment (Request) returns (Assignment) {}
+	// Register the sync service, give info to open stream
+	rpc RegisterSyncService (Registration) returns (Reply) {}
+	// Send message forwards from Coord to SyncService
+	rpc Forward (stream Message) returns (stream Message) {}
 }
 
 // For registering server w/ coordinator
 message Registration {
-	string sid = 1;
+	string sid = 1;	// cluster SID
 	string hostname = 2;
 	string port = 3;
-	string type = 4;
+	string type = 4; // primary, secondary, sync
 }
 
 // Assigns a client to a specific server cluster, active server
