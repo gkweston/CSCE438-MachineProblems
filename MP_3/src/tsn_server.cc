@@ -10,6 +10,9 @@ Diffs required:
 	* Create ./datastore/TYPE_ID/[context.data, user_timelines.data]
 	* Change IO to write properly to files
 	* Establish connection w/ coordinator, send LOCK_ACQUIRE, LOCK_RELEASE on this channel
+
+	STEP FINAL.
+	* Gank their file IO, then just USE YOUR MP_2 for the rest (it's not worse!)
 */
 
 /*
@@ -191,8 +194,7 @@ class SNSServiceImpl final : public SNSService::Service {
 		return Status::OK;
 	}
 
-	Status Timeline(ServerContext* context, 
-	ServerReaderWriter<Message, Message>* stream) override {
+	Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
 		Message message;
 		Client *c;
 		while(stream->Read(&message)) {
@@ -205,7 +207,15 @@ class SNSServiceImpl final : public SNSService::Service {
 			std::ofstream user_file(filename,std::ios::app|std::ios::out|std::ios::in);
 			google::protobuf::Timestamp temptime = message.timestamp();
 			std::string time = google::protobuf::util::TimeUtil::ToString(temptime);
-			std::string fileinput = time+" :: "+message.username()+":"+message.msg()+"\n";
+			// ------->>> DIFF
+			// std::string fileinput = time+" :: "+message.username()+":"+message.msg()+"\n";
+			// We don't want our delim to shadow what a user may input
+			// Could use something like...
+			// std::string fileinput = time+"\x24"+message.username()+"\x24"+message.msg()+"\n";
+			// But for now, we'll just do
+			std::string fileinput = time+"|:|"+message.username()+"|:|"+message.msg()+"\n";
+			// <<<-------
+
 			//"Set Stream" is the default message from the client to initialize the stream
 			if(message.msg() != "Set Stream")
 				user_file << fileinput;

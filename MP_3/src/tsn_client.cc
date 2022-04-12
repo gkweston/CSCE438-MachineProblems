@@ -1,4 +1,7 @@
 /*
+
+(!) Replace with MP2 client file
+
 Required:
     Connect to coord with CID
     recv assignment
@@ -283,35 +286,35 @@ IReply Client::Login() {
 void Client::Timeline(const std::string& username) {
     /* (!) TODO (!)
         Add screen refresh, CLEARSCREEN and render all buffered messages such as in last MP
-        (!)     (!)
+       (!)      (!)
     */
     ClientContext context;
 
     std::shared_ptr<ClientReaderWriter<Message, Message>> stream(
-            active_stub_->Timeline(&context));
+        active_stub_->Timeline(&context)
+    );
 
     //Thread used to read chat messages and send them to the server
     std::thread writer([username, stream]() {
-            std::string input = "Set Stream";
-            Message m = MakeMessage(username, input);
-            stream->Write(m);
-            while (1) {
+        std::string input = "Set Stream";
+        Message m = MakeMessage(username, input);
+        stream->Write(m);
+        while (1) {
             input = getPostMessage();
             m = MakeMessage(username, input);
             stream->Write(m);
-            }
-            stream->WritesDone();
-            });
+        }
+        stream->WritesDone();
+    });
 
     std::thread reader([username, stream]() {
-            Message m;
-            while(stream->Read(&m)){
-
+        Message m;
+        while(stream->Read(&m)){
             google::protobuf::Timestamp temptime = m.timestamp();
             std::time_t time = temptime.seconds();
             displayPostMessage(m.username(), m.msg(), time);
-            }
-            });
+        }
+    });
 
     //Wait for the threads to finish
     writer.join();

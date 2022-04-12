@@ -16,7 +16,7 @@ PROTOC = protoc
 GRPC_CPP_PLUGIN = grpc_cpp_plugin
 GRPC_CPP_PLUGIN_PATH ?= `which $(GRPC_CPP_PLUGIN)`
 
-all: system-check tsn_client tsn_server tsn_coordinator
+all: system-check tsn_client tsn_server tsn_coordinator tsn_sync_service
 
 tsn_client: sns.pb.o sns.grpc.pb.o tsn_client.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
@@ -25,6 +25,9 @@ tsn_server: sns.pb.o sns.grpc.pb.o tsn_server.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 
 tsn_coordinator: sns.pb.o sns.grpc.pb.o tsn_coordinator.o
+	$(CXX) $^ $(LDFLAGS) -g -o $@
+
+tsn_sync_service: sns.pb.o sns.grpc.pb.o tsn_sync_service.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 
 .PRECIOUS: %.grpc.pb.cc
@@ -36,7 +39,7 @@ tsn_coordinator: sns.pb.o sns.grpc.pb.o tsn_coordinator.o
 	$(PROTOC) --cpp_out=. $<
 
 clean:
-	rm -f *.txt *.o *.pb.cc *.pb.h tsn_client tsn_server tsn_coordinator
+	rm -f *.txt *.o *.pb.cc *.pb.h tsn_client tsn_server tsn_coordinator tsn_sync_service
 
 
 # The following is to test your system and ensure a smoother experience.
