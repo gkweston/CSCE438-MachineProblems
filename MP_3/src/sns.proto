@@ -72,10 +72,12 @@ message Message {
 service SNSCoordinatorService {
 	// Save this server in coordinator routing table
 	rpc RegisterServer (Registration) returns (Reply) {}
-	// Get the client assignment so they can comm w/ server
+	// Get the client assignment so they can comm w/ server, save their CID
 	rpc FetchAssignment (Request) returns (Assignment) {}
 	// Register the sync service, give info to open stream
 	rpc RegisterSyncService (Registration) returns (Reply) {}
+	// Respond with all active users
+	rpc FetchGlobalUsers(Request) returns (GlobalUsers) {}
 	// Send message forwards from Coord to SyncService
 	rpc Forward (stream Message) returns (stream Message) {}
 }
@@ -93,4 +95,9 @@ message Assignment {
 	string sid = 1; // cluster SID
 	string hostname = 2;
 	string port = 3;
+}
+
+// All users active on all clusters
+message GlobalUsers {
+	repeated string cid = 1;
 }

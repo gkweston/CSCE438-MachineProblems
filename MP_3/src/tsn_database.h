@@ -4,7 +4,8 @@
     datastore/
         $(CLUSTER_ID}/
             ${SERVER_TYPE}/
-                clients.data
+                local_clients.data
+                global_clients.data
                 ${CID}/
                     timeline.data
                     sent_messages.data

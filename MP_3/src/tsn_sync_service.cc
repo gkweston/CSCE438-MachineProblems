@@ -28,11 +28,13 @@ using google::protobuf::Timestamp;
 using csce438::Message;
 
 /*
-    @init: Register self with coordinator
+    @init:
+        Register self with coordinator
+        Fetch all global users, write to datastore/$CLUSTER_ID/global_clients.data
 
     ~Thread1
-    1.  Update clients from
-            datastore/$CLUSTER_ID/primary/clients.data
+    1.  Update localclients in memory from
+            datastore/$CLUSTER_ID/primary/local_clients.data
     
     2.  For each CID, periodically check
             datastore/$CLUSTER_ID/primary/$CID/sent_messages.data
@@ -63,7 +65,8 @@ class SyncService {
 public:
     void register_with_coordinator();
     void update_local_clients();
-    void check_for_new_messages();
+    void check_for_outbound();
+    void check_for_inbound();
     void forward_messages();
     void write_to_timeline(std::string cid);
 }
