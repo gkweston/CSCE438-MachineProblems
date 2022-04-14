@@ -48,8 +48,8 @@ private:
     std::vector<ClientEntry> client_routing_table;
     std::vector<ForwardEntry> forwards_to_send;
     
-    int get_idx_server_entry(std::string sid);
-    int get_idx_forward_entry(std::string cid);
+    ServerEntry* get_server_entry(std::string sid);
+    ForwardEntry* get_forward_entry(std::string cid);
     // std::string server_reg_helper(const ServerEntry& e); //(!)
 
 public:
@@ -59,13 +59,12 @@ public:
         // We'll recv this RPC on server startup and add to the appropo routing table
 
         // * Check if the sid exists in server_routing_table
-        int idx = get_idx_server_entry(reg->sid());
+        ServerEntry* serv_entry = get_server_entry(reg->sid());
         ServerType serv_type = parse_type(reg->type());
 
         // * If so, add this server to that one's entry (overwrite primary, append secondary)
-        if (idx != -1) {
-            ServerEntry serv_entry = server_routing_table[idx];
-            serv_entry.update_entry(reg->port(), serv_type);
+        if (serv_entry != nullptr) {
+            serv_entry->update_entry(reg->port(), serv_type);
         }
 
         // * If not, make a new entry
@@ -77,25 +76,7 @@ public:
         // * Set repl message to success or failure
         repl->set_msg("SERVER REGISTERED");
         return Status::OK;
-
-        // ------->>> DIFF
-        // ServerEntry serv;
-        
-        // // Set server_entry: sid, hostname, port, status, type
-        // serv.sid = reg->sid();
-        // serv.hostname = reg->hostname();
-        // serv.port = reg->port();
-        // serv.type = parse_type(std::string(reg->type()));
-
-        // // Flip this to inactive when heartbeat fails
-        // serv.status = ServerStatus::ACTIVE;
-
-        // std::string reg_result = server_reg_helper(serv);
-        // repl->set_msg(reg_result);
-        // return Status::OK;
-        // <<<-------
     }
-
     // --- Client RPCs
     Status FetchAssignment(ServerContext* ctx, const Request* req, Assignment* assigned) override {
 
@@ -110,10 +91,10 @@ public:
 
         std::cout << "Fetching assignment for\ncid=" << cid_int << "\ntarget_sid=" << target_sid << '\n';//(!)
 
-        int serv_idx = get_idx_server_entry(target_sid);
+        ServerEntry* serv_entry = get_server_entry(target_sid);
 
         // * If no server was found for the generated SID
-        if (serv_idx == -1) {
+        if (serv_entry == nullptr) {
             std::cout << "No server found for\ncid=" << cid_int << "target_sid="<<target_sid <<"\n";//(!)
             std::cout <<"Cancelling...\n";//(!)
             // handle
@@ -128,25 +109,19 @@ public:
         client_routing_table.push_back(client_entry);
 
         std::cout << "Server assigned for\ncid=" << cid_int << "\nsid=" << target_sid <<'\n';//(!)
-
-        // (!) Copy constructor? -- no owned pointers in class, probably ok...
-        // We need ownership of this server entry so we can change things...
-        ServerEntry* serv_entry = &server_routing_table[serv_idx];
         assigned->set_sid(serv_entry->sid);
         assigned->set_hostname(serv_entry->hostname);
 
         // * If primary is active, assign to that, else secondary
         if (serv_entry->primary_status == ServerStatus::ACTIVE) {
-            assigned->set_port(serv_entry.primary_port);
+            assigned->set_port(serv_entry->primary_port);
         } else if (serv_entry->secondary_status == ServerStatus::ACTIVE) {
-            assigned->set_port(serv_entry.secondary_port);
+            assigned->set_port(serv_entry->secondary_port);
         } else {
-            std::cout << "NO ACTIVE SERVER FOR REQD:\nsid=" << serv_entry.sid << '\n';
+            std::cout << "NO ACTIVE SERVER FOR REQD:\nsid=" << serv_entry->sid << '\n';
         }
-
         // * Finally, add this client to that server's clients_served
         serv_entry->clients_served.push_back(cid_str);
-        
 
         return Status::OK;
     }
@@ -155,31 +130,36 @@ public:
     /* (!) TODO (!) all SyncService RPCs*/
     // Register the sync service, save addr
     Status RegisterSyncService (ServerContext* ctx, const Registration* reg, Reply* repl) override {
-        // Takes Registration, returns Reply
 
         // * Find entry
-        int serv_idx = get_idx_server_entry(reg->sid());
+        ServerEntry* serv_entry = get_server_entry(reg->sid());
 
         // * If entry DNE, reply with a "CLUSTER DNE TRY AGAIN" msg
-        if (serv_idx == -1) {
+        if (serv_entry == nullptr) {
             repl->set_msg("404");
             return Status::OK;
         }
 
         // * Update sync port
-        server_routing_table[serv_idx].sync_port = reg->port();
+        serv_entry->sync_port = reg->port();
         repl->set_msg("200");
         return Status::OK;
     }
 	// Respond with all registered users; returns GlobalUsers
 	Status FetchGlobalClients(ServerContext* ctx, const Request* req, GlobalUsers* glob) override{
-        // Takes Request, returns GlobalUsers
-        std::cout << "not done\n";//(!)
-        return Status::CANCELLED;
+        if (req->username() != "SYNC") { //(!)
+            std::cout << "ERR RPC UNAME FETCHGLOBAL\n";//(!)
+        }//(!)
+        
+        // * Copy all global users to response
+        for (const ClientEntry& e : client_routing_table) {
+            glob->add_cid(e.cid);
+        }
+        return Status::OK;
     }
-	// Send message forwards from Coord to SyncService; Returns stream of messages
+	
+    // Send message forwards from Coord to SyncService; Returns stream of messages
     // (?)(!) cheaper just to do a unidirectional repeated msg??
-
     // RE(!) probably want to thread this (!)
 	Status ForwardEntryStream (ServerContext* ctx, ServerReaderWriter<UnflaggedDataEntry, UnflaggedDataEntry>* stream) override {
         
@@ -197,7 +177,7 @@ public:
         // --- Start handling incoming forwards
         // * Read all incoming forwards from sync service
         UnflaggedDataEntry incoming_fwd;
-        int idx = -1;
+        ForwardEntry* fwd_entry = nullptr;
         std::string prev_cid = "";
         while (stream->Read(&incoming_fwd)) {
 
@@ -209,21 +189,22 @@ public:
                 then if it's working we may remove the doublestore
             */
 
-            std::string curr_cid = incoming_fwd.cid();
             // Check if we already found the index of this cid
+            std::string curr_cid = incoming_fwd.cid();
             if (prev_cid != curr_cid) {
                 // Got a different cid, find the index if exists
-                idx = get_idx_forward_entry(curr_cid);
+                // idx = get_idx_forward_entry(curr_cid);
+                fwd_entry = get_forward_entry(curr_cid);
             }
 
             // Check if we have a container for these forwards already
-            // (!) Dyna memory alloc? copy cons? etc. ?
             
             // * Is there a forward container for this cid?
-            if (idx != -1) {
+            if (fwd_entry != nullptr) {
                 // exists
                 // * If so, get this container and add forward
-                forwards_to_send[idx].data_entries.push(incoming_fwd);
+                // forwards_to_send[idx].data_entries.push(incoming_fwd);
+                fwd_entry->data_entries.push(incoming_fwd);
             } else {
                 // DNE
                 // * Else, create new container
@@ -231,106 +212,61 @@ public:
                 new_fwd_e.cid = curr_cid;
                 new_fwd_e.data_entries.push(incoming_fwd);
                 forwards_to_send.push_back(new_fwd_e);
+                
                 // save idx of this entry in case the next has the same cid
-                idx = forwards_to_send.size();
+                
+                // there may be copy semantics when we push to vector, so to be
+                // safe we will get a pointer to the element we just pushed
+                // idx = forwards_to_send.size();
+                fwd_entry = &forwards_to_send[forwards_to_send.size() - 1];
             }
             // save the prev cid
             prev_cid = curr_cid;
         }
         // --- All done with incoming forwards
         // * Does THIS sync service serve any clients we have forwards for?
-        int serv_idx = get_idx_server_entry(sync_serv_sid);
-        for (int i = 0; i < server_routing_table[serv_idx].clients_served.size(); ++i) {
-            std::string client_id = server_routing_table[serv_idx].clients_served[i];
+        ServerEntry* serv_entry = get_server_entry(sync_serv_sid);
 
+        for (const std::string& client_id: serv_entry->clients_served) {
             // Check if this client has any data entry forwards
-            int fwd_idx = get_idx_forward_entry(client_id);
+            fwd_entry = get_forward_entry(client_id);
+
+            if (fwd_entry == nullptr) {
+                // No forwards here, move along...
+                return Status::OK;
+            }
 
             // * If the connected sync services this client and this client has forwards, send them
             //   to sync and remove fwds from memory
-            while (!forwards_to_send[fwd_idx].data_entries.empty()) {
-                stream->Write(forwards_to_send[fwd_idx].data_entries.front());
-                forwards_to_send[fwd_idx].data_entries.pop();
+            while(!fwd_entry->data_entries.empty()) {
+                stream->Write(fwd_entry->data_entries.front());
+                fwd_entry->data_entries.pop();
             }
+
         }
         // * Finish stream
-
         return Status::OK;
     }
 };
-// ------->>> DIFF
-// std::string SNSCoordinatorServiceImpl::server_reg_helper(const ServerEntry& e) {
-//     // Check if this server already exists in the routing table, if so, replace with new entry
-//     // std::vector<ServerEntry>* tbl = &[primary_routing_table|secondary_routing_table]
-//     int idx;
-//     if (e.type == ServerType::PRIMARY) {
-//         idx = find_primary_server(e.sid);
-
-//         if (idx < 0) { //DNE
-//             primary_routing_table.push_back(e);
-//             std::cout << "Registered primary server\nsid=" << e.sid << "\nport=" << e.port << "\ntype=PRIMARY" << "\n";//(!)
-//         } else { // Overwrite
-//             primary_routing_table[idx] = e;
-//             std::cout << "Registered primary server overwrite\nsid=" << e.sid << "\nport=" << e.port << "\ntype=PRIMARY" << "\n";//(!)
-//         }
-//     } else if (e.type == ServerType::SECONDARY) {
-//         idx = find_secondary_server(e.sid);
-
-//         if (idx < 0) { //DNE
-//             secondary_routing_table.push_back(e);
-//             std::cout << "Registered secondary server\nsid=" << e.sid << "\nport=" << e.port << "\ntype=SECONDARY" << "\n";//(!)
-//         } else { // Overwrite
-//             secondary_routing_table[idx] = e;
-//             std::cout << "Registered secondary server overwrite\nsid=" << e.sid << "\nport=" << e.port << "\ntype=SECONDARY" << "\n";//(!)
-//         }
-//     }
-//     return std::string("Server Registered");
-// }
-// int SNSCoordinatorServiceImpl::find_primary_server(std::string sid) {
-//     // For now we return the index of the server or -1
-//     int idx = 0;
-//     for (ServerEntry e: primary_routing_table) {
-//         if (sid == e.sid) {
-//             return idx;
-//         }
-//         ++idx;
-//     }
-//     return -1;
-// }
-// int SNSCoordinatorServiceImpl::find_secondary_server(std::string sid) {
-//     // For now we return the index of the server or -1
-//     int idx = 0;
-//     for (ServerEntry e: secondary_routing_table) {
-//         if (sid == e.sid) {
-//             return idx;
-//         }
-//         ++idx;
-//     }
-//     return -1;
-// }
-// <<<-------
-
-// RE(!) Refactor these to return a ptr or nullptr so we can have temporary ownership
-//       to change entries
-int SNSCoordinatorServiceImpl::get_idx_server_entry(std::string sid) {
-    int idx = 0;
-    for (ServerEntry e: server_routing_table) {
-        if (sid == e.sid) {
-            return idx;
+// RE(!) Could change these to auto for loops, but idk what ownership
+//       principles look like for those...
+ServerEntry* SNSCoordinatorServiceImpl::get_server_entry(std::string sid) {
+    // Return a reference to the relevant table entry
+    for (int i = 0; i < server_routing_table.size(); ++i) {
+        if (server_routing_table[i].sid == sid) {
+            return &server_routing_table[i];
         }
-        ++idx;
     }
-    return -1;
+    return nullptr;
 }
-int SNSCoordinatorServiceImpl::get_idx_forward_entry(std::string cid) {
-    int idx = 0;
-    for (ForwardEntry e: forwards_to_send) {
-        if (cid == e.cid) {
-            return idx;
+ForwardEntry* SNSCoordinatorServiceImpl::get_forward_entry(std::string cid) {
+    // Return a reference to the relevant table entry
+    for (int i = 0; i < forwards_to_send.size(); ++i) {
+        if (forwards_to_send[i].cid == cid) {
+            return &forwards_to_send[i];
         }
-        ++idx;
     }
-    return -1;
+    return nullptr;
 }
 
 void RunServer(std::string port) {
