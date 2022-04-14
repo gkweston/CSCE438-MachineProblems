@@ -78,7 +78,8 @@ service SNSCoordinatorService {
 	rpc RegisterSyncService (Registration) returns (Reply) {}
 	// Respond with all registered users
 	rpc FetchGlobalClients (Request) returns (GlobalUsers) {}
-	// Send message forwards from Coord to SyncService
+	// Issued by a SyncService, forward messages TO coordinator, then waits
+	// for any messages forwarded FROM coordinator. Stream is unique to this call.
 	rpc ForwardEntryStream (stream UnflaggedDataEntry) returns (stream UnflaggedDataEntry) {}
 }
 

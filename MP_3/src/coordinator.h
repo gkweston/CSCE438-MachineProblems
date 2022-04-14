@@ -1,5 +1,10 @@
 #include <string>
+#include <queue>
 #include <algorithm>
+#include <vector>
+
+#include "sns.grpc.pb.h"
+using csce438::UnflaggedDataEntry;
 
 enum ServerStatus { 
     ACTIVE, 
@@ -67,9 +72,11 @@ std::string type_to_string(ServerType t) {
 //     }
 // };
 
+// (!) add an entry for clients served when we know we can keep a vector of elements
 struct ServerEntry {
     std::string sid; //cluster ID
     std::string hostname;
+    std::vector<std::string> clients_served;
 
     std::string primary_port;
     std::string secondary_port;
@@ -111,3 +118,10 @@ struct ClientEntry {
 
     ClientEntry(std::string client, std::string server) : cid(client), sid(server) { }
 };
+
+// Forward routing table --- may be refactored later
+struct ForwardEntry {
+    std::string cid;
+    std::queue<UnflaggedDataEntry> data_entries;
+};
+

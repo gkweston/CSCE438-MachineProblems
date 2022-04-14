@@ -91,7 +91,7 @@ using csce438::SNSCoordinatorService;
 
 class SyncService {
     // Member data
-    std::string sid; // clusterID
+    std::string sid; // this SyncService's clusterID
     std::string coord_addr;
     std::string hostname;
     std::string port;
@@ -197,11 +197,17 @@ void SyncService::EntryForwardHandler() {
     std::shared_ptr<grpc::ClientReaderWriter<UnflaggedDataEntry, UnflaggedDataEntry>> stream {
         coord_stub_->ForwardEntryStream(&ctx)
     };
-
-    // * Forward local entries, if any exists (sync -> coordinator)
     
+    // * Forward local entries, if any exists (sync -> coordinator)
     // Spawn a thread to write all forwards
     std::thread writer([&]() { //(X)
+
+        // * send special init message so the coordinator knows
+        //   who it's dealing with
+        UnflaggedDataEntry stream_init_msg;
+        stream_init_msg.set_cid("SYNCINIT");
+        stream_init_msg.set_entry(sid);
+
         // * Write all data entries to stream
         while (!entries_to_forward.empty()) {
             stream->Write(entries_to_forward.front());
