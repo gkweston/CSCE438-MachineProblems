@@ -75,6 +75,7 @@ using grpc::ServerReaderWriter;
 using grpc::ServerWriter;
 using grpc::Status;
 using grpc::ClientContext;
+
 using csce438::Message;
 using csce438::ListReply;
 using csce438::Request;
@@ -385,7 +386,7 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	if (type == ServerType::INVALID) {
+	if (type == ServerType::NONE) {
 		std::cout << "Server type error\n";//(!)
 		return 1;
 	}

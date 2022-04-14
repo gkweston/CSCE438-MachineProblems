@@ -107,7 +107,7 @@ int Client::connectTo()
         return -1;
     }
 
-    if (iAssigned.cluster_sid == "NONE" || iAssigned.hostname == "NONE" || iAssigned.port == "NONE") {
+    if (iAssigned.cluster_sid == "404" || iAssigned.hostname == "404" || iAssigned.port == "404") {
         std::cout << "No server found to assign to client\n";//(!)
         return -1;
     }

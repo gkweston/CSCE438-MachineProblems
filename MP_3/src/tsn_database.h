@@ -113,8 +113,8 @@ std::vector<std::string> get_file_diffs(std::string fname) {
     tmp_stream.close();
     
     // * at end of file rename tempfile as file
-    std::string tfile = FILENAME + ".tmp";
-    std::string dfile = FILENAME + ".data";
+    std::string tfile = fname + ".tmp";
+    std::string dfile = fname + ".data";
     rename(tfile.c_str(), dfile.c_str());
 
     // * return vector of diff lines

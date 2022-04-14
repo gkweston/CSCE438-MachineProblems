@@ -76,10 +76,10 @@ service SNSCoordinatorService {
 	rpc FetchAssignment (Request) returns (Assignment) {}
 	// Register the sync service, give info to open stream
 	rpc RegisterSyncService (Registration) returns (Reply) {}
-	// Respond with all active users
-	rpc FetchGlobalUsers(Request) returns (GlobalUsers) {}
+	// Respond with all registered users
+	rpc FetchGlobalClients (Request) returns (GlobalUsers) {}
 	// Send message forwards from Coord to SyncService
-	rpc Forward (stream Message) returns (stream Message) {}
+	rpc Forward (stream UnflaggedDataEntry) returns (stream UnflaggedDataEntry) {}
 }
 
 // For registering server w/ coordinator
@@ -99,5 +99,10 @@ message Assignment {
 
 // All users active on all clusters
 message GlobalUsers {
-	repeated string cid = 1;
+	repeated string cid = 2;
+}
+
+// Plaintext which represents one line in a database without IO flags
+message UnflaggedDataEntry {
+	string entry = 1;
 }
