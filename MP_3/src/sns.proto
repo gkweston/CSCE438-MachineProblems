@@ -79,7 +79,7 @@ service SNSCoordinatorService {
 	// Respond with all registered users
 	rpc FetchGlobalClients (Request) returns (GlobalUsers) {}
 	// Send message forwards from Coord to SyncService
-	rpc Forward (stream UnflaggedDataEntry) returns (stream UnflaggedDataEntry) {}
+	rpc ForwardEntryStream (stream UnflaggedDataEntry) returns (stream UnflaggedDataEntry) {}
 }
 
 // For registering server w/ coordinator
@@ -104,5 +104,8 @@ message GlobalUsers {
 
 // Plaintext which represents one line in a database without IO flags
 message UnflaggedDataEntry {
-	string entry = 1;
+	// simplifies msg routing
+	string cid = 1;
+	// entry = { TIME|:|CID|:|MSG }
+	string entry = 2;
 }

@@ -97,6 +97,7 @@ class SyncService {
     std::string port;
     std::vector<std::string> global_client_table;
     std::queue<UnflaggedDataEntry> entries_to_forward;
+    std::queue<UnflaggedDataEntry> entries_recvd;
 
     // RPC stuff
     std::string coord_addr;
@@ -105,8 +106,9 @@ class SyncService {
     // Helpers
     void RegisterWithCoordinator(const Registration& reg);
     void UpdateGlobalClientTable();
-    void ForwardMessages();
-    void RecvMessageForwards();
+    void EntryForwardHandler();
+    void ProcessDataEntries();
+    
 public:
     SyncService(const std::string& caddr, const std::string& host, const std::string& p, const std::string& id) 
         : coord_addr(caddr), hostname(host), port(p), sid(id) {
@@ -178,21 +180,69 @@ void SyncService::UpdateGlobalClientTable() {
         global_client_table[i] = glob.cid(i);
     }
 }
-void SyncService::ForwardMessages() {
+void SyncService::EntryForwardHandler() {
 
-    // * If msgs to fwd, open stream
+    /*
+    Idea:
+        Open stream to forward entries
+        If any entries, forward to coord (all outbound, by user)
+        Before closing stream read messages, this are forwarded by coord
+        Close stream
+    */
+    // * Update global clients
+    UpdateGlobalClientTable();
+
+    // * Open bidirectional stream
     ClientContext ctx;
-    std::shared_ptr<ClientReaderWriter<UnflaggedDataEntry, UnflaggedDataEntry>> stream(
-        coord_stub_->Forward(&ctx)
-    );
+    std::shared_ptr<grpc::ClientReaderWriter<UnflaggedDataEntry, UnflaggedDataEntry>> stream {
+        coord_stub_->ForwardEntryStream(&ctx)
+    };
 
-    // * Forward any messages to coord
-    while (!entries_to_forward.empty()) {
-        stream->Write(entries_to_forward.pop());
+    // * Forward local entries, if any exists (sync -> coordinator)
+    
+    // Spawn a thread to write all forwards
+    std::thread writer([&]() { //(X)
+        // * Write all data entries to stream
+        while (!entries_to_forward.empty()) {
+            stream->Write(entries_to_forward.front());
+            entries_to_forward.pop();
+        }
+        stream->WritesDone();
+    });
+
+    // * Read forwards, if any exist (coordinator -> sync)
+    UnflaggedDataEntry new_entry;
+    while (stream->Read(&new_entry)) {
+        entries_recvd.push(new_entry);
     }
-}
-void SyncService::RecvMessageForwards() {
+    writer.join();
+    Status stat = stream->Finish();
 
+    if (!stat.ok()) {
+        std::cout << "SYNC STREAM ERR\n";//(!)
+    }
+
+    // * Call database IO methods
+    ProcessDataEntries();
+
+
+    // ------->>> DIFF
+    // // * If msgs to fwd, open stream
+    // ClientContext ctx;
+    // std::shared_ptr<ClientReaderWriter<UnflaggedDataEntry, UnflaggedDataEntry>> stream(
+    //     coord_stub_->Forward(&ctx)
+    // );
+
+    // // * Forward any messages to coord
+    // while (!entries_to_forward.empty()) {
+    //     stream->Write(entries_to_forward.pop());
+    // }
+    // <<<-------
+}
+void SyncService::ProcessDataEntries() { // Database IO method
+    // * Populate any new outbound data entries
+
+    // * Process recvd data entry forwards
 }
 
 int main() {

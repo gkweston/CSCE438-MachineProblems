@@ -171,7 +171,7 @@ public:
     }
 	// Send message forwards from Coord to SyncService; Returns stream of messages
     // (?)(!) cheaper just to do a unidirectional repeated msg??
-	Status Forward (ServerContext* ctx, ServerReaderWriter<UnflaggedDataEntry, UnflaggedDataEntry>* stream) override {
+	Status ForwardEntryStream (ServerContext* ctx, ServerReaderWriter<UnflaggedDataEntry, UnflaggedDataEntry>* stream) override {
         // Takes stream Message, returns stream Message
         return Status::CANCELLED;
     }
