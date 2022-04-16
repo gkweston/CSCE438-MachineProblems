@@ -1,46 +1,59 @@
 /*
-    Database schema
-    
+The format of this (probably) breaks some header file management best-practices,
+but should not break the project. This may be refactored on delivery, or it may
+just be kept this way (because it works!)
+
+tsn_database is a pseudoclass to manage our tsn data on disc, it includes 3 
+namespaces and a few helpers, all wrapped in the namespace DatabaseIO
+
+namespace SyncService
+    Manage the database files for the follower sync service, some of these files
+    are shared with PrimaryServer, where they are marked below as
+        Read:           S:[R]
+        Write:          S:[W]
+        Exclusive:      S:<X>       -> where a distributed lock service is required
+
+
+namespace PrimaryServer
+    Manage database files for the initial primary server which is prone to
+    faults, files shared with SyncService, are marked below as
+        Read:           P:[R]
+        Write:          P:[W]
+        Exclusive:      P:<X>       -> where a distributed lock service is required        
+
+namespace SecondaryServer
+    Manage database files for the backup server which is brought online, reads
+    ALL datastore/* files and primarily just calls stat() before copying the
+    new version to it's file system directory
+
+
+TSN FileSystem Schema:
+
+$GLOBAL_CWD/
     datastore/
         $(CLUSTER_ID}/
             ${SERVER_TYPE}/
-                local_clients.data
-                global_clients.data
-                ${CID}/
-                    timeline.data
-                    sent_messages.data
-                    following.data
-*/
+                global_clients.data         P:[R], S:[W]
+                clients/
+                    ${CID}/
+                        timeline.data       P:[RW]<X>, S:[W]<X>
+                        sent_messages.data  P:[W], S:[R]
+                        following.data      P:[W], S:[R]
 
-/*
-    We need an interface for doing some database operations
+Each [R] technically writes a file, as it needs to flip the 1st io_flag byte
+for each line, so it doesn't read this line again.
 
-    Datastore will comprise of 3 files
+io_flag is only used for SyncService and PrimaryServer, which isn't used by both
+in any file, so only 1 is needed. SecondaryServer doesn't use an io_flag to copy,
+although if it assumes control, it becomes PrimaryServer and uses the io_flag.
 
-    ${CID}/timeline.data:
-        server_flag | secondary_flag | TIME | CID | MSG
+In some cases, we traverse this filesystem to collect metadata. 
+    e.g., to read all local clients on the server cluster, SyncService
+    reads all filenames in datastore/$CLUSTER_ID/$SERVER_TYPE/local_clients/
 
-    ${CID}/sent_messages.data:
-        sync_flag | secondary_flag | TIME | CID | MSG
-
-    ${CID}/following.data
-        CID
-
-    sync_flag:
-        Server has made a write here, when sync_service reads
-        flip this to 0
-
-    server_flag:
-        Sync_service has made a write here, when server reads
-        flip to 0
-
-    optional secondary_flag:
-        Server or sync_service has made a write here, when
-        secondary reads flip to 0
-*/
-
-/*
-    Our read functions will target ONLY lines where sync_flag=1
+tl;dr
+    This should be it's own linked library at this point,
+    but it's easier to just #include it for now...
 */
 
 #include <ctime>
@@ -50,30 +63,37 @@
 #include <vector>
 #include <iomanip>
 #include <sstream>
+#include <grpc++/grpc++.h>
+#include <google/protobuf/util/time_util.h>
+
+// ---> NOTE (!)
+#include <experimental/filesystem>
+// requires g++ <files>.cc -lstdc++fs
+
+#include "sns.grpc.pb.h"
 
 using google::protobuf::Timestamp;
+// using google::protobuf::util;
 using csce438::Message;
+using csce438::UnflaggedDataEntry;
 
 #define FILE_DELIM (std::string("|:|"))
 
+namespace DatabaseIO {
 
-// (!) defined in server namespace
-// // writes where sync, secondary flags=1
-// void server_write();
+// For file reads
+std::string GLOBAL_CWD = std::experimental::filesystem::current_path().string();
 
-// // parses for server_flag=1, return that data
-// void server_check_update();
-
-// courtesy of SO
 static std::time_t to_time_t(const std::string& str, bool is_dst = false, const std::string& format = "%Y-%b-%d %H:%M:%S") {
+    // Cast a timestamp string to time_t, useful for gRPC timestamp conversions
     std::tm t = {0};
     t.tm_isdst = is_dst ? 1 : 0;
     std::istringstream ss(str);
     ss >> std::get_time(&t, format.c_str());
     return mktime(&t);
 }
-
 std::vector<std::string> split_string(std::string s, std::string delim=FILE_DELIM) {
+    // Split a string on delim
     std::vector<std::string> parts;
     size_t pos = 0;
     std::string token;
@@ -85,11 +105,19 @@ std::vector<std::string> split_string(std::string s, std::string delim=FILE_DELI
     parts.push_back(s);
     return parts;
 }
-
-std::vector<std::string> get_file_diffs(std::string fname) {
+std::string get_last_token(std::string s, std::string delim="/") {
+    // Get last token of a string split, we use it to get the metadata in our
+    // filesystem naming conventions (e.g. /path/to/CID, extract CID)
+	size_t pos = 0;
+	while ((pos = s.find(delim)) != std::string::npos) {
+		s.erase(0, pos + delim.length());
+	}
+	return s;
+}
+std::vector<std::string> get_file_diffs(std::string path_no_ext) {
     
     /*
-    Read in user data, anywhere we see sync_flag=1 we'll add this
+    Read in user data, anywhere we see flag=1 we'll add this
     line to a vector and return the vector. Overwrite this to sync_flag=0
     */
 
@@ -97,8 +125,8 @@ std::vector<std::string> get_file_diffs(std::string fname) {
     std::vector<std::string> diffd_entries;
 
     // * Read in the file
-    std::ifstream data_stream(fname + std::string(".data"));
-    std::ofstream tmp_stream(fname + std::string(".tmp"));
+    std::ifstream data_stream(path_no_ext + std::string(".data"));
+    std::ofstream tmp_stream(path_no_ext + std::string(".tmp"));
     
     while( getline(data_stream, line) ) {
         // * if flag=1, set flag=0, add this line to a vector
@@ -113,8 +141,8 @@ std::vector<std::string> get_file_diffs(std::string fname) {
     tmp_stream.close();
     
     // * at end of file rename tempfile as file
-    std::string tfile = fname + ".tmp";
-    std::string dfile = fname + ".data";
+    std::string tfile = path_no_ext + ".tmp";
+    std::string dfile = path_no_ext + ".data";
     rename(tfile.c_str(), dfile.c_str());
 
     // * return vector of diff lines
@@ -123,16 +151,16 @@ std::vector<std::string> get_file_diffs(std::string fname) {
 
 Message entry_string_to_grpc_message(std::string entry_str) {
     // parts = flag1|flag2|time|cid|msg
-    std::string parts = split_string(entry_str);
+    std::vector<std::string> parts = split_string(entry_str);
 
-    Message msg
+    Message msg;
     if (parts.size() != 5) {
         std::cout << "entry to gRPC ERR\n";//(!)
         msg.set_msg("ERROR");
         return msg;
     }
 
-    std::time ttime = to_time_t(parts[2]);
+    std::time_t ttime = to_time_t(parts[2]);
     Timestamp* timestamp = new Timestamp();
     *timestamp = google::protobuf::util::TimeUtil::TimeTToTimestamp(ttime);
     msg.set_allocated_timestamp(timestamp);
@@ -144,9 +172,72 @@ Message entry_string_to_grpc_message(std::string entry_str) {
 
 namespace SyncService {
 
-    std::vector<Message> check_update(std::string fname) {
+    /*
+        Target functionallity
+            - Read all clients on this cluster into memory
+                @datastore/$SID/$SERVER_TYPE/local_clients
+            - For a given CID read all following into memory
+                @datastore/$SID/$SERVER_TYPE/local_clients/$CID/following.txt
+            - Read updates on a given
+                @ datastore/$SID/$SERVER_TYPE/local_clients/$CID/sent_messages.data
+            - Write received forwards to
+                @datastore/$SID/$SERVER_TYPE/local_clients/$CID/timeline.data
+            - Write received global users to
+                @datastore/$SID/$SERVER_TYPE/global_clients.data
+    */
 
-        // (!) fname should include *_set_messages.data
+    std::vector<std::string> read_local_cids_from_fs(std::string cluster_sid, std::string stype="primary") {
+        // - Read all from memory
+        //      @datastore/$SID/$SERVER_TYPE/local_clients
+        if (stype != "primary" && stype != "secondary") { //(!)
+            std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::READ_LOCAL_CID_FROM_FS\n";//(!)
+            std::vector<std::string> v;
+            return v;
+        }
+
+        std::string path_ = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients";
+        std::vector<std::string> local_cids;
+        for (const auto& dir : std::experimental::filesystem::directory_iterator(path_)) {
+            //* Split and get only the last token which is CID
+            std::string cid_token = get_last_token(dir.path(), "/");
+            local_cids.push_back(cid_token);
+        }
+        return local_cids;
+    }
+    std::vector<std::string> read_following_by_cid(std::string cluster_sid, std::string cid, std::string stype="primary") {
+        // - For a given CID read all following into memory
+        //     @datastore/$SID/$SERVER_TYPE/local_clients/$CID/following.txt        
+        if (stype != "primary" && stype != "secondary") { //(!)
+            std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::READ_FOLLOWING_BY_CID\n";//(!)
+            std::vector<std::string> v;
+            return v;
+        }
+
+        // * Generate path string 
+        std::string path_ = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/following.data";
+
+        // * Read all entries into vector
+        std::ifstream ffollowing(path_);
+        std::string usr;
+
+        std::vector<std::string> following;
+        while(getline(ffollowing, usr)) {
+            if (usr.size() > 0 && usr[0] != '\n') { //(!)
+                following.push_back(usr);
+            }
+        }
+
+        // * Pass it back to caller
+        return following;
+    }
+    std::vector<UnflaggedDataEntry> check_update_by_cid(std::string cluster_sid, std::string cid, std::string stype="primary") {
+        // - Read updates on a given
+        //     @ datastore/$SID/$SERVER_TYPE/local_clients/$CID/sent_messages.data
+        if (stype != "primary" && stype != "secondary") { //(!)
+            std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::CHECK_UPDATE\n";//(!)
+            std::vector<UnflaggedDataEntry> v;
+            return v;
+        }
 
         /*
             Get new messages sent by user corresponding to fname
@@ -154,34 +245,81 @@ namespace SyncService {
             Only taking fname (not cid) here allows the server/service of whatever
             type to iterate all CIDs and generate fnames to check updates from
         */
-        std::vector<Message> new_messages;
+
+        std::string path_no_ext = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/sent_messages";
+        std::vector<UnflaggedDataEntry> new_entries;
 
         // * Get file diff lines
-        std::vector<std::string> file_diffs = get_file_diffs(fname);
+        std::vector<std::string> file_diffs = get_file_diffs(path_no_ext);
         size_t n_diffs = file_diffs.size();
         // * If no diffs, return empty vec
         if (n_diffs == 0) {
-            return new_messages;
+            return new_entries;
         }
-        // * For each file diff line, generate a gRPC Message and add to vec
+        // * For each file diff line, generate a gRPC UnflaggedDataEntry and add to vec
         for (int i = 0; i < n_diffs; ++i) {
-            if (file_diffs[i].size() == 0) {
+            // Skip incomplete msgs and empty lines
+            if (file_diffs[i].size() == 0 || file_diffs[i][0] == '\n') {
                 continue;
             }
-
-            Message new_msg = entry_string_to_grpc_message(file_diffs[i]);
-            if (new_msg.msg() == "ERROR") {
-                continue;
-            }
-            new_messages.push_back(new_msg);
+            
+            UnflaggedDataEntry d_entry;
+            d_entry.set_cid(cid);
+            d_entry.set_entry(file_diffs[i]);
+            new_entries.push_back(d_entry);
         }
-        return new_messages;
+        return new_entries;
+    }
+    void write_fwd_to_timeline(std::string cluster_sid, std::string cid, std::string fwd, std::string stype="primary") {
+        //  - Writes a single received forward to
+        //     @datastore/$SID/$SERVER_TYPE/local_clients/$CID/timeline.data
+        //    with IO_flag=1 to indicate to the server it is a new message
+        if (stype != "primary" && stype != "secondary") { //(!)
+            std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::WRITE_FWD_TO_TIMELINE\n";//(!)
+            return;
+        }
+
+        // * Generate path string corresponding to this user
+        std::string path_ = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/timeline.data";
+
+        // * Fwds come as UnflaggedDataEntry.entry(), set flag=1
+        fwd[0]='1';
+
+        // * Write this to user's timeline file
+        std::ofstream user_timeline(path_, std::ios::app);
+        user_timeline << fwd << '\n';//(!)
+
+    }
+    void write_global_clients(std::string cluster_sid, const std::vector<std::string>& global_clients, std::string stype="primary") {
+        // - Write received global users to
+        //     @datastore/$SID/$SERVER_TYPE/global_clients.data
+        if (stype != "primary" && stype != "secondary") { //(!)
+            std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::WRITE_GLOBAL_CLIENTS\n";//(!)
+            std::cout << "got stype=" << stype << "\n\n";//(!)
+            return;
+        }
+
+        // * Generate path string
+        std::string path_no_ext = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/global_clients";
+        std::string tfile = path_no_ext + ".tmp";
+        // * Write to temp file
+        std::ofstream fglob_client_tmp(tfile);
+        for (const std::string& cid: global_clients) {
+            fglob_client_tmp << cid << '\n';//(!)
+        }
+        // * Rename temp file
+        std::string dfile = path_no_ext + ".data";
+        rename(tfile.c_str(), dfile.c_str());
     }
 
 }   // end namespace SyncService
 
 namespace PrimaryServer {
     
+    /*
+        Target functionallity
+    */
+
     std::vector<Message> check_update(std::string fname) {
 
         // (!) fname should inclue *_timeline.dat
@@ -220,6 +358,10 @@ namespace PrimaryServer {
 }   // end namespace PrimaryServer
 
 namespace SecondaryServer {
+    
+    /*
+        Target functionallity
+    */
 
     // secondary flag is always second in ${CID}/set_messages.data, ${CID}/timeline.data
     bool flag_idx = false;
@@ -245,119 +387,4 @@ namespace SecondaryServer {
 
 }   // end namespace SecondaryServer
 
-
-// (!)(!)(!)(!) vvv
-// namespace SyncService {
-
-//     struct SentMessageEntry {
-//         /*
-//             sync_flag | secondary_flag | TIME | CID | MSG
-//         */
-//         bool sync_flag;
-//         bool secondary_flag;
-//         std::string timestr;
-//         std::string cid;
-//         std::string msg;
-
-//         // params = v[0], v[1], ..., v[4]
-//         SentMessageEntry(std::string syncf, std::string secf, std::string t, std::string c, std::string m) :
-//             timestr(t), cid(c), msg(m) {
-//             sync_flag = (syncf == "1") ? true : false;
-//             secondary_flag = (secf == "1") ? true : false
-//         }
-
-//         Message to_grpc_msg() {
-//             // * Gen grpc timestamp
-//             std::time_t ttime = to_time_t(timestr);
-//             Timestamp* timestamp = new Timestamp();
-//             *timestamp = google::protobuf::util::TimeUtil::TimeTToTimestamp(ttime);
-//             // * Make grpc msg
-//             Message grpc_msg;
-//             grpc_msg.set_allocated_timestamp(timestamp);
-//             grpc_msg.set_username(cid);
-//             grpc_msg.set_msg(msg);
-//         }
-
-//         std::string to_str() { //(!)
-//             std::string entry_str = "";
-//             // * get sync flag
-//             entry_str += (sync_flag) ? "1" : "0";
-//             entry_str += FILE_DELIM;
-//             // * get secdonary flag
-//             entry_str += (secondary_flag) ? "1" : "0";
-//             entry_string += FILE_DELIM;
-//             // * get timestr, cid, msg
-//             entry_str += (timestr + FILE_DELIM);
-//             entry_str += (cid + FILE_DELIM);
-//             entry_str += msg;
-
-//             return entry_str;
-//         }
-//     };
-
-//     // (!) May want to write a generalizable version of this functiton...
-//     // void write_sent_messages(std::string fname, std::vector<SentMessageEntry>const &entries) {
-//     //     ofstream out_stream(fname);
-//     //     for (int i = 0; i < entries.size(); ++i) {
-//     //         SentMessageEntry e = entries[i];
-//     //         out_stream << e.to_str() << '\n';
-//     //     }
-//     // }
-
-//     // Issued on ${CID}_sent_message.data
-//     // Should we generalize this to Prim/Sec server updates as well -- we would just check different flags...
-//     std::vector<Message> check_update(std::string fname) {
-//         /*
-//         Parse the ${CID}_sent_message.data file
-//         return a vector<Message> where sync_flag=1
-//         set these entries to sync_flag=0
-//         */
-
-//         std::vector<Message> new_messages;
-//         std::string line;
-//         std::fstream file_stream(fname);
-//         std::vector<SentMessageEntry*> file_entries;
-
-//         // * Read in all file lines into memory
-//         while(getline(file_stream, line)) {
-//             // parts = { sync_flag, secondary_flag, TIME, CID, MSG }
-//             std::vector<std::string> parts = split_string(line);
-            
-//             // * Add complete entries to file_entries vec
-//             if (parts.size() == 5) {
-//                 SentMessageEntry* e = new SentMessageEntry(parts[0], parts[1], parts[2], parts[3], parts[4]);
-//                 file_entries.push_back(e);
-//             }
-//         }
-//         // * Retrieve all lines where sync_flag=1
-//         std::vector<Message> new_messages;
-//         for (int i = 0; i < file_entries.size(); ++i) {
-//             SentMessageEntry* e = file_entries[i];
-//             if (e->sync_flag) {
-//                 Message grpc_msg = e->to_grpc_msg();
-//                 new_messages.push_back(grpcs_msg);
-//                 e->sync_flag = false;
-//             }
-//         }
-//         // * Write all messages back to file, so sync_flag=0
-//         // For now we won't use a function, to keep from dealing with const& stuff
-//         // write_sent_messages(fname, file_entries);
-//         for (int i = 0; i < entries.size(); ++i) {
-//             SentMessageEntry* e = entries[i];
-//             file_stream << e->to_str() << '\n';
-//         }
-//         file_stream.close();
-
-//         // * Return our new message so they can be propogated across other server clusters
-//         return new_messages;
-//     }
-// } // end SyncService namespace
-
-// namespace ServerPrimary {
-
-// } // end namespace ServerPrimary
-
-// namespace ServerSecondary {
-//     // We'll do this on next step...
-// } // end namespace ServerSecondary
-// 
+}   // end namespace DatabaseIO

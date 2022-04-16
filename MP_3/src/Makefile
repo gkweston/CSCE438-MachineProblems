@@ -24,13 +24,13 @@ tsn_client: sns.pb.o sns.grpc.pb.o tsn_client.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 
 tsn_server: sns.pb.o sns.grpc.pb.o tsn_server.o
-	$(CXX) $^ $(LDFLAGS) -g -o $@
+	$(CXX) $^ $(LDFLAGS) -g -o $@ -lstdc++fs
 
 tsn_coordinator: sns.pb.o sns.grpc.pb.o tsn_coordinator.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 
 tsn_sync_service: sns.pb.o sns.grpc.pb.o tsn_sync_service.o
-	$(CXX) $^ $(LDFLAGS) -g -o $@
+	$(CXX) $^ $(LDFLAGS) -g -o $@ -lstdc++fs
 
 .PRECIOUS: %.grpc.pb.cc
 %.grpc.pb.cc: %.proto

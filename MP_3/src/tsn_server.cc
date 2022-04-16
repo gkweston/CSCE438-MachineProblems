@@ -13,6 +13,8 @@ Diffs required:
 
 	STEP FINAL.
 	* Gank their file IO, then just USE YOUR MP_2 for the rest (it's not worse!)
+
+	(!) User should follow self from init
 */
 
 /*
@@ -214,7 +216,7 @@ class SNSServiceImpl final : public SNSService::Service {
 			// Could use something like...
 			// std::string fileinput = time+"\x24"+message.username()+"\x24"+message.msg()+"\n";
 			// But for now, we'll just do
-			std::string fileinput = time+"|:|"+message.username()+"|:|"+message.msg()+"\n";
+			std::string fileinput = time+"|:|"+message.username()+"|:|"+message.msg();
 			// <<<-------
 
 			//"Set Stream" is the default message from the client to initialize the stream

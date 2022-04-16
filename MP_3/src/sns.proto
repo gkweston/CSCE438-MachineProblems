@@ -66,7 +66,6 @@ message Message {
 	//Time the message was sent
 	google.protobuf.Timestamp timestamp = 3;
 }
-
 /* ------- MP3 Changes ------- */
 // --- Coordinator stuff
 service SNSCoordinatorService {
@@ -80,9 +79,9 @@ service SNSCoordinatorService {
 	rpc FetchGlobalClients (Request) returns (GlobalUsers) {}
 	// Issued by a SyncService, forward messages TO coordinator, then waits
 	// for any messages forwarded FROM coordinator. Stream is unique to this call.
+	// (!) can be simplified as a SetOfForwards each way
 	rpc ForwardEntryStream (stream UnflaggedDataEntry) returns (stream UnflaggedDataEntry) {}
 }
-
 // For registering server w/ coordinator
 message Registration {
 	string sid = 1;	// cluster SID
@@ -90,23 +89,20 @@ message Registration {
 	string port = 3;
 	string type = 4; // primary, secondary, sync
 }
-
 // Assigns a client to a specific server cluster, active server
 message Assignment {
 	string sid = 1; // cluster SID
 	string hostname = 2;
 	string port = 3;
 }
-
 // All users active on all clusters
 message GlobalUsers {
 	repeated string cid = 2;
 }
-
-// Plaintext which represents one line in a database without IO flags
+// Plaintext which represents one line in a database with IO flag=0
 message UnflaggedDataEntry {
 	// simplifies msg routing
 	string cid = 1;
-	// entry = { TIME|:|CID|:|MSG }
+	// entry = { 0|:|TIME|:|CID|:|MSG }
 	string entry = 2;
 }

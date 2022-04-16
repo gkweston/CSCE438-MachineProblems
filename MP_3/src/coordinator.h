@@ -50,6 +50,38 @@ std::string type_to_string(ServerType t) {
     }
 }
 
+// a tsn_database.h helper, could be refactored to reduce superfluous includes
+std::vector<std::string> split_string(std::string s, std::string delim=",") {
+    // Split a string on delim
+    std::vector<std::string> parts;
+    size_t pos = 0;
+    std::string token;
+    while ((pos = s.find(delim)) != std::string::npos) {
+        token = s.substr(0, pos);
+        parts.push_back(token);
+        s.erase(0, pos + delim.length());
+    }
+    parts.push_back(s);
+    return parts;
+}
+std::unordered_set<std::string> parse_stream_init_msg(std::string init_entry, std::string& sid) {
+    // Set the cluster_id/sid for this SyncService, return a set of all clients
+    // which are being followed on this cluster for outbound msg forwards
+
+	// * Parse message on delim=','
+	std::vector<std::string> parts = split_string(init_entry, ",");
+
+	// * Extract the SID and set sid by reference
+	sid = parts[0];
+
+	// * return the unordered set of followees for this cluster
+	std::unordered_set<std::string> followees;
+	for (int i = 1; i < parts.size(); ++i) {
+		followees.insert(parts[i]);
+	}
+	return followees;
+}
+
 /* 
     refactor this to support:
     ServerEntry {
@@ -125,3 +157,55 @@ struct ForwardEntry {
     std::queue<UnflaggedDataEntry> data_entries;
 };
 
+/*
+Forward Entry Stream
+Clusters = [1, 2, 3, 4]
+
+SS1 sends all new messages when it opens the stream (A, B, C)
+Coordinator buffers the messages as such
+
+    AllForwards = *A, *B, *C
+
+    ForwardTable
+    SID      | forwards
+    ---------+------------
+    1        |
+    2        | *A, *B, *C
+    3        | *A, *B, *C
+    4        | *A, *B, *C     
+
+Coordinator has no msgs to forward to SS1
+
+SS2 sends all msgs (D, E, F, G)
+
+Coordinator buffers
+    
+    AllForwards = *A, *B, *C, *D, *E, *F, *G
+
+    ForwardTable
+    SID      | forwards
+    ---------+------------
+    1        | *D, *E, *F, *G
+    2        | *A, *B, *C
+    3        | *A, *B, *C, *D, *E, *F, *G
+    4        | *A, *B, *C, *D, *E, *F, *G
+
+Coordinator has forwards for 2, and sends those
+Coord.send(SS2, {*A, *B, *C})
+
+    AllForwards = *A, *B, *C, *D, *E, *F, *G
+
+    ForwardTable
+    SID      | forwards
+    ---------+------------
+    1        | *D, *E, *F, *G
+    2        | 
+    3        | *A, *B, *C, *D, *E, *F, *G
+    4        | *A, *B, *C, *D, *E, *F, *G
+
+On each stream SSN sends an unordered_set of followees
+At each step of sending the forwards the coordinator checks
+    Does any client of SS2 follow *A->CID?
+
+Cap the AllForwards buffer at 100 messages and use a circular array implementation
+*/

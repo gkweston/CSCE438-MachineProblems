@@ -17,4 +17,8 @@ Notes:
     * All server/client IDs are assigned on execution (no uuidgen)
     * Change tsc -> tsn_client
     * Change tsd -> tsn_server
+
+For member and helper functions
+        CamelCase is used when a function issues an RPC (immediately, or downstream)
+        snake_case is used otherwise
 ```
