@@ -48,7 +48,8 @@ using csce438::Reply;
 using csce438::FlaggedDataEntry;
 using csce438::SNSCoordinatorService;
 
-#define DEFAULT_HOST (std::string("0.0.0.0"))
+#define DEFAULT_HOST    (std::string("0.0.0.0"))
+#define SLEEP_MS        (5000)
 
 /*
     (!) could really benefit from multithreading
@@ -132,6 +133,7 @@ class SyncService {
     std::unordered_set<std::string> get_clients_followed();
     ClientFollowingEntry* get_client_following_entry(std::string cid);
     std::vector<std::string> get_clients_who_follow(std::string cid);
+    void Spin();
     
 public:
     SyncService(const std::string& caddr, const std::string& host, const std::string& p, const std::string& id) 
@@ -160,8 +162,9 @@ public:
         
         // Issue databaseIO to get local clients into memory
         update_local_client_table();
-    }
 
+        Spin();
+    }
     // <<<-------(T)(!)
     void test(std::string msg) {
         std::cout << msg << '\n';
@@ -170,6 +173,13 @@ public:
     }
     // >>>-------(T)(!)
 };
+void SyncService::Spin() {
+    while (true) {
+        std::cout << "Issuing spin cycle! then sleeping for " << SLEEP_MS << '\n';//(!)
+        EntryForwardHandler();
+        std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_MS));
+    }
+}
 void SyncService::RegisterWithCoordinator(const Registration& reg, int count) {
 
     /*
@@ -284,32 +294,8 @@ std::unordered_set<std::string> SyncService::get_clients_followed() {
     // * return set to caller
     return clients_followed;
 }
-// FlaggedDataEntry SyncService::compose_stream_init_msg() { // ---(!) DEPRECATED
-//     // A stream init msg which tells coordinator:
-//     //  - Which cluster the sync service comes from
-//     //  - Who (globally) is followed by all users (locally) on this cluster
-    
-//     // * Init our message with SYNCINIT as cid
-//     FlaggedDataEntry stream_init_msg;
-//     stream_init_msg.set_cid("SYNCINIT");
-
-//     // * Compose our metadata string with "SID,followee1, followee2, ..."
-//     std::string meta = sid;
-
-//     // * Make the set of all followees on this cluster
-//     std::unordered_set<std::string> followees = get_clients_followed();
-
-//     // * Add all CIDs of followees to our meta string
-//     std::unordered_set<std::string>::iterator itr;
-//     for (itr = followees.begin(); itr != followees.end(); ++itr) {
-//         meta += ',' + * itr;
-//     }
-
-//     // * Set meta string and return data entry
-//     stream_init_msg.set_entry(meta);
-//     return stream_init_msg;
-// }
 void SyncService::EntryForwardHandler() {
+    std::cout << "Checking for bidi-forwards\n";//(!)
     // (!) This more than anything would benefit from class-wide multithreading
     //     for simplicity, we're just doing it function wide for now.
     
@@ -350,10 +336,10 @@ void SyncService::EntryForwardHandler() {
     std::thread writer([&]() { //(X) 
         // * Write all data entries to stream
         while (!entries_to_forward.empty()) {
-            // >>>-------(T)
-            std::cout << "sending cid=" << entries_to_forward.front().cid() << '\n';
-            std::cout << entries_to_forward.front().entry() << "\n\n";
-            // <<<-------(T)
+            // >>>-------(!)
+            std::cout << "sending cid=" << entries_to_forward.front().cid() << '\n';//(!)
+            std::cout << entries_to_forward.front().entry() << "\n\n";//(!)
+            // <<<-------(!)
             stream->Write(entries_to_forward.front());
             entries_to_forward.pop();
         }
@@ -366,10 +352,10 @@ void SyncService::EntryForwardHandler() {
     std::thread reader([&]() {
         FlaggedDataEntry new_entry;
         while (stream->Read(&new_entry)) {
-            // >>>-------(T)
-            std::cout << "recvd cid=" << new_entry.cid() << '\n';
-            std::cout << new_entry.entry() << "\n\n";
-            // <<<-------(T)
+            // >>>-------(!)
+            std::cout << "recvd cid=" << new_entry.cid() << '\n';//(!)
+            std::cout << new_entry.entry() << "\n\n";//(!)
+            // <<<-------(!)
             entries_recvd.push(new_entry);
         }
     });
@@ -526,24 +512,6 @@ void SyncService::proc_entry_recvs() { // Database IO method
     std::cout << "End proc_entry_recvs\n";//(!)
 }
 
-void StartSyncService(std::string caddr_, std::string sid, std::string p) {
-    SyncService synchro(caddr_, DEFAULT_HOST, p, sid);
-
-    // synchro.process_recvd_data_entries();
-    // ^^^-------(T)
-
-    /*
-    Test efforts:
-        set .../[1,2]/sent_messages.data flag=1
-        have the coordinator write all of these forwards on receipt
-        have the coordinator send hardcoded forwards
-    */
-    synchro.test("Testing EntryForwardHandler\n");
-    std::cout << "-(T)-\nexiting.\n";
-    exit(0);
-    //    -------(T)
-}
-
 int main(int argc, char** argv) {
 
     /*
@@ -580,7 +548,23 @@ int main(int argc, char** argv) {
     }
     
     // write hardcoded test functions for sync
-    StartSyncService(coord, serverID, port);
-
-    return 1;
+    // StartSyncService(coord, serverID, port);
+    SyncService synchro(coord, DEFAULT_HOST, port, serverID);
+    return 0;
 }
+
+// (!)
+// void StartSyncService(std::string caddr_, std::string sid, std::string p) {
+//     SyncService synchro(caddr_, DEFAULT_HOST, p, sid);
+
+//     /*
+//     Test efforts:
+//         set .../[1,2]/sent_messages.data flag=1
+//         have the coordinator write all of these forwards on receipt
+//         have the coordinator send hardcoded forwards
+//     */
+//     // synchro.test("Testing EntryForwardHandler\n");
+//     // std::cout << "-(T)-\nexiting.\n";
+//     // exit(0);
+//     //    -------(T)
+// }//(!)

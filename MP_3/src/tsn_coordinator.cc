@@ -175,18 +175,6 @@ public:
         serv_entry->sync_port = reg->port();
         std::cout << "Registered sync service with sid=" << reg->sid() << " with cluster_id=" << serv_entry->sid << '\n';
         repl->set_msg("200");
-
-        // >>>-------(T) Forward test Phase1, hardcode
-        if (reg->sid() == "777") {
-            FlaggedDataEntry m;
-            m.set_cid("12");
-            m.set_entry("1|:|2022-04-16T20:28:03Z|:|12|:|user 12 is sending this new msg");
-            for (int i = 0; i < 3; ++i) {
-                serv_entry->forward_queue.push(m);
-            }
-        }
-        // <<<-------(T)
-
         return Status::OK;
     }
 	// Respond with all registered users; returns GlobalUsers
@@ -220,9 +208,6 @@ public:
         if (init_msg.cid() == "SYNCINIT") { // (!) good
             sync_sid = init_msg.entry();
             sync_serv_entry = get_server_entry(sync_sid);
-            // <<<-------(T)
-            std::cout << "GOT SYNC INIT MSG";//(T)
-            // >>>-------(T)
         } else { // (!) bad - should never happen
             std::cout << "ERR UNORDERED INIT MESSAGE ON FORWARDENTRYSTREAM\n\n";
         }
@@ -233,14 +218,6 @@ public:
             // ex: { "222", "1|:|TIME|:|222|:|Hello, it's me!"" }
             // -> originates from SID serving 222
             // -> Should be propogated to all SIDs serving a client following 222
-
-            // <<<-------(T)
-            std::cout << "Got inbound from cid=" << inbound_fwd.cid() << "\n" << inbound_fwd.entry() << "\n\n";
-            if (sync_sid == "777") {
-                // only testing we can read in messages
-                continue;
-            }
-            // >>>-------(T)
 
             /// <<<------- Untested thusfar(!)
             // * Get sender entry so we can access their followers
@@ -269,10 +246,6 @@ public:
         // (!) this may be expensive indirection, expensive enough to just copy the queue and clear it in
         //     the server entry
         while (!sync_serv_entry->forward_queue.empty()) {
-            // >>>-------(T)
-            std::cout << "sending outbound cid=" << sync_serv_entry->forward_queue.front().cid() << '\n';
-            std::cout << sync_serv_entry->forward_queue.front().entry() << "\n\n";
-            // <<<-------(T)
             stream->Write(sync_serv_entry->forward_queue.front());
             sync_serv_entry->forward_queue.pop();
         }
@@ -281,112 +254,6 @@ public:
         return Status::OK;
     }
     //<<<(!)
-    /*
-    // <<<-------DIFF
-	Status ForwardEntryStream (ServerContext* ctx, ServerReaderWriter<FlaggedDataEntry, FlaggedDataEntry>* stream) override {
-        
-        // * Read special init message and set save sid
-        std::string sync_serv_sid;
-        std::unordered_set<std::string> sync_serv_followees;
-        FlaggedDataEntry init_msg;
-        stream->Read(&init_msg);
-
-        if (init_msg.cid() == "SYNCINIT") {
-            // This should ALWAYS be the 1st message of any stream (!), extract
-            // the entry and parse SID, followees for this cluster so we can
-            // route messages in the outbound forward section
-            
-            std::string meta = init_msg.entry();
-            // * Unpack sid and clients being followed on this cluster
-            //   e.g.
-            //   if Sync has (clients->following):
-            //        (A->1), (B->1,2), (C->3)
-            //   we save that this service should be forwarded any
-            //   message sent by users 1, 2, 3
-            sync_serv_followees = parse_stream_init_msg(meta, sync_serv_sid);
-        }
-
-        // --- Handle incoming forwards
-        // * Read all incoming forwards from sync service
-        FlaggedDataEntry incoming_fwd;
-        ForwardEntry* fwd_entry = nullptr;
-        std::string prev_cid = "";
-        while (stream->Read(&incoming_fwd)) {
-
-            
-            // forwards_to_send looks like:
-            // string "CID", queue<string>  { "0|:|TIME|:|CID|:|MSG", "..." }
-
-            // we store CID twice so if we have issues we can debug
-            // then if it's working we may remove the doublestore
-            
-
-            // Check if we already found the index of this cid
-            std::string curr_cid = incoming_fwd.cid();
-            if (prev_cid != curr_cid) {
-                // Got a different cid, find the index if exists
-                // idx = get_idx_forward_entry(curr_cid);
-                fwd_entry = get_forward_entry(curr_cid);
-            }
-
-            // Check if we have a container for these forwards already
-            
-            // * Is there a forward container for this cid?
-            if (fwd_entry != nullptr) {
-                // exists
-                // * If so, get this container and add forward
-                // forwards_to_send[idx].data_entries.push(incoming_fwd);
-                fwd_entry->data_entries.push(incoming_fwd);
-            } else {
-                // DNE
-                // * Else, create new container
-                ForwardEntry new_fwd_e;
-                new_fwd_e.cid = curr_cid;
-                new_fwd_e.data_entries.push(incoming_fwd);
-                forwards_to_send.push_back(new_fwd_e);
-                
-                // save idx of this entry in case the next has the same cid
-                
-                // there may be copy semantics when we push to vector, so to be
-                // safe we will get a pointer to the element we just pushed
-                // idx = forwards_to_send.size();
-                fwd_entry = &forwards_to_send[forwards_to_send.size() - 1];
-            }
-            // save the prev cid
-            prev_cid = curr_cid;
-        }
-        // --- Handle outbound forwards
-        // * (!) we need routable message headers (!)
-        
-        // <<<------- DIFF
-        // * Does THIS sync service serve any clients we have forwards for? (!)(!)(!)
-        ServerEntry* serv_entry = get_server_entry(sync_serv_sid);
-
-        for (const std::string& client_id: serv_entry->clients_served) {
-            // Check if this client has any data entry forwards
-            fwd_entry = get_forward_entry(client_id);
-
-            if (fwd_entry == nullptr) {
-                // No forwards here, move along...
-                return Status::OK;
-            }
-
-            // * If the connected sync services this client and this client has forwards, send them
-            //   to sync and remove fwds from memory
-            while(!fwd_entry->data_entries.empty()) {
-                stream->Write(fwd_entry->data_entries.front());
-                fwd_entry->data_entries.pop();
-            }
-
-        }
-        // ------->>>
-
-        // * Finish stream
-        return Status::OK;
-    }
-    // ------->>>
-    */
-    //>>>(!)
 };
 // RE(!) Could change these to auto for loops, but idk what ownership
 //       principles look like for those...

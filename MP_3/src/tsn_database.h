@@ -181,7 +181,7 @@ Message entry_string_to_grpc_message(std::string entry_str) {
 }
 
 namespace SyncService {
-
+    // May convert to class as DatabaseIO(sid, ..., etc.) (!)
     /*
         Target functionallity
             - Read all clients on this cluster into memory
@@ -289,46 +289,6 @@ namespace SyncService {
         // * Return vec of these entries
         return entries;
     }
-    // std::vector<FlaggedDataEntry> check_update_by_cid(std::string cluster_sid, std::string cid, std::string stype="primary") { // --(!) DEPRECATED
-    //     // - Read updates on a given
-    //     //     @ datastore/$SID/$SERVER_TYPE/local_clients/$CID/sent_messages.data
-    //     if (stype != "primary" && stype != "secondary") { //(!)
-    //         std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::CHECK_UPDATE\n";//(!)
-    //         std::vector<FlaggedDataEntry> v;
-    //         return v;
-    //     }
-
-    //     /*
-    //         Get new messages sent by user corresponding to fname
-
-    //         Only taking fname (not cid) here allows the server/service of whatever
-    //         type to iterate all CIDs and generate fnames to check updates from
-    //     */
-
-    //     std::string path_no_ext = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/sent_messages";
-    //     std::vector<FlaggedDataEntry> new_entries;
-
-    //     // * Get file diff lines
-    //     std::vector<std::string> file_diffs = get_file_diffs(path_no_ext);
-    //     size_t n_diffs = file_diffs.size();
-    //     // * If no diffs, return empty vec
-    //     if (n_diffs == 0) {
-    //         return new_entries;
-    //     }
-    //     // * For each file diff line, generate a gRPC FlaggedDataEntry and add to vec
-    //     for (int i = 0; i < n_diffs; ++i) {
-    //         // Skip incomplete msgs and empty lines
-    //         if (file_diffs[i].size() == 0 || file_diffs[i][0] == '\n') {
-    //             continue;
-    //         }
-            
-    //         FlaggedDataEntry d_entry;
-    //         d_entry.set_cid(cid);
-    //         d_entry.set_entry(file_diffs[i]);
-    //         new_entries.push_back(d_entry);
-    //     }
-    //     return new_entries;
-    // }
     void write_fwd_to_timeline(std::string cluster_sid, std::string cid, std::string fwd, std::string stype="primary") {
         //  - Writes a single received forward to
         //     @datastore/$SID/$SERVER_TYPE/local_clients/$CID/timeline.data
@@ -374,11 +334,29 @@ namespace SyncService {
 }   // end namespace SyncService
 
 namespace PrimaryServer {
-    
+    // May want to convert to class in server as DatabaseIO(sid, ..., etc); (!)
     /*
         Target functionallity
+            - Init filesystem for server cluster without disturbing any
+              secondary server files that may or may not exist
+                @datastore/$SID/primary
+            - Init client file when a new client connects, without distrubing
+              any files that may or may not exist for that client
+                @datastore/$SID/primary/local_clients/$CID
+            - Write outbound messages from a client with IOflag=1
+                @datastore/$SID/primary/local_clients/$CID/sent_messages.tmp
+            - Update user following.data when a valid FOLLOW command is issued for a
+              local OR global user
+                @datastore/$SID/primary/local_clients/$CID/following.data
+            - Read in global clients to serve LIST command
+                @datastore/$SID/primary/global_clients.data
+            - Read messages from user timeline where IOflag=1, set IOflag=0, to
+              be served to the user in TIMELINE mode
+                @datastore/$SID/primary/local_clients/$CID/timeline.data
+            - Write messages to user timeline where IOflag=0 iff message originated
+              on local cluster
+                @datastore/$SID/primary/local_clients/$CID/timeline.data
     */
-
     std::vector<Message> check_update(std::string fname) {
 
         // (!) fname should inclue *_timeline.dat
@@ -412,8 +390,51 @@ namespace PrimaryServer {
         }
         return new_messages;
     }
+    void init_server_fs(std::string sid) {
+        std::string sid_path = GLOBAL_CWD + "/datastore/" + sid + "/";
+        // * Check if an .../$SID/ DNE, create one
+        if (!file_exists(sid_path)) {
+            // delete the old .../$SID/primary
+            if (!std::experimental::filesystem::create_directory(sid_path)) {
+                std::cout << "Error on init_primary_fs create_directory for $SID/\n";//(!)
+            }	
+        }
+        // * Check if an .../$SID/primary exists that's not ours
+        if (file_exists(sid_path + "primary")) {
+            // delete the old .../$SID/primary
+            std::experimental::filesystem::remove_all(sid_path + "primary");
+        }
+        // * Make our .../$SID/primary/
+        if (!std::experimental::filesystem::create_directory(sid_path + "primary")) {
+            std::cout << "Error on init_primary_fs create_directory for $SID/primary\n";//(!)
+        }
+        // * Make our .../$SID/primary/local_clients
+        if (!std::experimental::filesystem::create_directory(sid_path + "primary/local_clients")) {
+            std::cout << "Error on init_primary_fs create_directory for $SID/primary/local_clients\n";//(!)
+        }
+        // We should now have .../$SID/primary with or without $SID/secondary without
+        // disturbing secondary's files if they exist
+    }
+    void init_client_fs(std::string sid, std::string cid) {
 
+    }
+    void write_to_sent_messages(std::string sid, std::string cid, std::string msg) {
+        // msg must be composed like as a FlaggedDataEntry in the file
+    }
+    void add_to_following(std::string sid, std::string local_follower_cid, std::string global_followee_cid) {
 
+    }
+    std::vector<std::string> read_global_clients(std::string sid) {
+
+    }
+    std::vector<FlaggedDataEntry> read_new_timeline_msgs(std::string sid, std::string cid) {
+
+    }
+    void write_local_msg_to_timeline(std::string sid, std::string cid_to_recv, std::string msg) {
+        // msg must be composed like as a FlaggedDataEntry in the file
+        // for local user to local user on this cluster
+        // write where IOflag=0 because we will have already routed a local msg to the user
+    }
 }   // end namespace PrimaryServer
 
 namespace SecondaryServer {
