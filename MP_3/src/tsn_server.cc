@@ -65,7 +65,7 @@ Diffs required:
 #include <grpc++/grpc++.h>
 
 #include "sns.grpc.pb.h"
-#include "coordinator.h"
+#include "tsn_coordinator.h"
 
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;

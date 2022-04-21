@@ -69,18 +69,25 @@ message Message {
 /* ------- MP3 Changes ------- */
 // --- Coordinator stuff
 service SNSCoordinatorService {
+	// --- Server
 	// Save this server in coordinator routing table
 	rpc RegisterServer (Registration) returns (Reply) {}
+	// Request::username should now be added to Request::arguments[0]'s followers.data
+	rpc FollowUpdate (Request) returns (Reply) {}
+
+	// --- Client
 	// Get the client assignment so they can comm w/ server, save their CID
 	rpc FetchAssignment (Request) returns (Assignment) {}
+	
+	// --- SyncServ
 	// Register the sync service, give info to open stream
 	rpc RegisterSyncService (Registration) returns (Reply) {}
-	// Respond with all registered users
+	// Respond with all registered users for all server clusters
 	rpc FetchGlobalClients (Request) returns (GlobalUsers) {}
 	// Issued by a SyncService, forward messages TO coordinator, then waits
 	// for any messages forwarded FROM coordinator. Stream is unique to this call.
 	// (!) can be simplified as a SetOfForwards each way
-	rpc ForwardEntryStream (stream UnflaggedDataEntry) returns (stream UnflaggedDataEntry) {}
+	rpc ForwardEntryStream (stream FlaggedDataEntry) returns (stream FlaggedDataEntry) {}
 }
 // For registering server w/ coordinator
 message Registration {
@@ -100,9 +107,10 @@ message GlobalUsers {
 	repeated string cid = 2;
 }
 // Plaintext which represents one line in a database with IO flag=0
-message UnflaggedDataEntry {
+// (!) becomes FlaggedDataEntry
+message FlaggedDataEntry {
 	// simplifies msg routing
 	string cid = 1;
-	// entry = { 0|:|TIME|:|CID|:|MSG }
+	// entry = { 1|:|TIME|:|CID|:|MSG }
 	string entry = 2;
 }

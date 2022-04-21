@@ -45,7 +45,7 @@ using csce438::Request;
 using csce438::GlobalUsers;
 using csce438::Registration;
 using csce438::Reply;
-using csce438::UnflaggedDataEntry;
+using csce438::FlaggedDataEntry;
 using csce438::SNSCoordinatorService;
 
 #define DEFAULT_HOST (std::string("0.0.0.0"))
@@ -69,7 +69,7 @@ using csce438::SNSCoordinatorService;
             datastore/$CLUSTER_ID/primary/$CID/sent_messages.data
         for new messages
 
-    3.  For each new message, forward to coordinator as UnflaggedDataEntry for routing
+    3.  For each new message, forward to coordinator as FlaggedDataEntry for routing
 
     --- P2 (~Thread2) ---
     Recvd new messages, pass to user's timeline file
@@ -113,8 +113,8 @@ class SyncService {
     std::vector<ClientFollowingEntry> local_client_table;
 
     // Forwarding containers
-    std::queue<UnflaggedDataEntry> entries_to_forward;      // come from .../$CID/sent_messages.data
-    std::queue<UnflaggedDataEntry> entries_recvd;           // go to .../$CID/timeline.data
+    std::queue<FlaggedDataEntry> entries_to_forward;      // come from .../$CID/sent_messages.data
+    std::queue<FlaggedDataEntry> entries_recvd;           // go to .../$CID/timeline.data
 
     // RPC stuff
     std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_;
@@ -128,7 +128,7 @@ class SyncService {
     void check_new_local_msgs();
     void proc_entry_recvs();
     void update_local_client_table();
-    UnflaggedDataEntry compose_stream_init_msg();
+    // FlaggedDataEntry compose_stream_init_msg(); // ===(!) DEPRECATED
     std::unordered_set<std::string> get_clients_followed();
     ClientFollowingEntry* get_client_following_entry(std::string cid);
     std::vector<std::string> get_clients_who_follow(std::string cid);
@@ -161,6 +161,14 @@ public:
         // Issue databaseIO to get local clients into memory
         update_local_client_table();
     }
+
+    // <<<-------(T)(!)
+    void test(std::string msg) {
+        std::cout << msg << '\n';
+        EntryForwardHandler();
+        std::cout << "---end test---\n";
+    }
+    // >>>-------(T)(!)
 };
 void SyncService::RegisterWithCoordinator(const Registration& reg, int count) {
 
@@ -237,8 +245,8 @@ void SyncService::check_new_local_msgs() {
 
     // * For each local client, check if there are new outbound message(s)
     for (const ClientFollowingEntry& client_: local_client_table) {
-        std::vector<UnflaggedDataEntry> new_entries = DatabaseIO::SyncService::check_update_by_cid(sid,client_.cid, "primary");
-
+        // std::vector<FlaggedDataEntry> new_entries = DatabaseIO::SyncService::check_update_by_cid(sid,client_.cid, "primary");
+        std::vector<FlaggedDataEntry> new_entries = DatabaseIO::SyncService::check_sent_by_cid(sid, client_.cid, "primary");
         // * Buffer each message to be forwarded later
         for (int i = 0; i < new_entries.size(); ++i) {
             entries_to_forward.push(new_entries[i]);
@@ -276,31 +284,31 @@ std::unordered_set<std::string> SyncService::get_clients_followed() {
     // * return set to caller
     return clients_followed;
 }
-UnflaggedDataEntry SyncService::compose_stream_init_msg() {
-    // A stream init msg which tells coordinator:
-    //  - Which cluster the sync service comes from
-    //  - Who (globally) is followed by all users (locally) on this cluster
+// FlaggedDataEntry SyncService::compose_stream_init_msg() { // ---(!) DEPRECATED
+//     // A stream init msg which tells coordinator:
+//     //  - Which cluster the sync service comes from
+//     //  - Who (globally) is followed by all users (locally) on this cluster
     
-    // * Init our message with SYNCINIT as cid
-    UnflaggedDataEntry stream_init_msg;
-    stream_init_msg.set_cid("SYNCINIT");
+//     // * Init our message with SYNCINIT as cid
+//     FlaggedDataEntry stream_init_msg;
+//     stream_init_msg.set_cid("SYNCINIT");
 
-    // * Compose our metadata string with "SID,followee1, followee2, ..."
-    std::string meta = sid;
+//     // * Compose our metadata string with "SID,followee1, followee2, ..."
+//     std::string meta = sid;
 
-    // * Make the set of all followees on this cluster
-    std::unordered_set<std::string> followees = get_clients_followed();
+//     // * Make the set of all followees on this cluster
+//     std::unordered_set<std::string> followees = get_clients_followed();
 
-    // * Add all CIDs of followees to our meta string
-    std::unordered_set<std::string>::iterator itr;
-    for (itr = followees.begin(); itr != followees.end(); ++itr) {
-        meta += ',' + * itr;
-    }
+//     // * Add all CIDs of followees to our meta string
+//     std::unordered_set<std::string>::iterator itr;
+//     for (itr = followees.begin(); itr != followees.end(); ++itr) {
+//         meta += ',' + * itr;
+//     }
 
-    // * Set meta string and return data entry
-    stream_init_msg.set_entry(meta);
-    return stream_init_msg;
-}
+//     // * Set meta string and return data entry
+//     stream_init_msg.set_entry(meta);
+//     return stream_init_msg;
+// }
 void SyncService::EntryForwardHandler() {
     // (!) This more than anything would benefit from class-wide multithreading
     //     for simplicity, we're just doing it function wide for now.
@@ -325,35 +333,50 @@ void SyncService::EntryForwardHandler() {
 
     // * Open bidi-stream
     ClientContext ctx;
-    std::shared_ptr<grpc::ClientReaderWriter<UnflaggedDataEntry, UnflaggedDataEntry>> stream {
+    std::shared_ptr<grpc::ClientReaderWriter<FlaggedDataEntry, FlaggedDataEntry>> stream {
         coord_stub_->ForwardEntryStream(&ctx)
     };
+
+    // Always start the stream with { "SYNCINIT", sid }, before dispatching reader/writer -(!) neccessary?
+
+    // * send special init message with metadata to help forward message routing
+    FlaggedDataEntry stream_init_msg;
+    stream_init_msg.set_cid("SYNCINIT");
+    stream_init_msg.set_entry(sid);
+    // * Write init msg to stream - should always be first msg on fresh stream
+    stream->Write(stream_init_msg);
     
     // * Forward local entries, if any exists (sync -> coordinator)
-    // Spawn a thread to write all forwards
-    std::thread writer([&]() { //(X)
-
-        // * send special init message with metadata to help forward message routing
-        //   see SyncService::compose_stream_init_msg() for details
-        UnflaggedDataEntry stream_init_msg = compose_stream_init_msg();
-
-        // * Write init msg to stream
-        stream->Write(stream_init_msg);
-
+    std::thread writer([&]() { //(X) 
         // * Write all data entries to stream
         while (!entries_to_forward.empty()) {
+            // >>>-------(T)
+            std::cout << "sending cid=" << entries_to_forward.front().cid() << '\n';
+            std::cout << entries_to_forward.front().entry() << "\n\n";
+            // <<<-------(T)
             stream->Write(entries_to_forward.front());
             entries_to_forward.pop();
         }
+        // * Signal we're done writing, and will commence reading
         stream->WritesDone();
     });
 
     // * Read forwards, if any exist (coordinator -> sync)
-    UnflaggedDataEntry new_entry;
-    while (stream->Read(&new_entry)) {
-        entries_recvd.push(new_entry);
-    }
+    // (!) test this does not leave any orphaned msgs on stream (!)
+    std::thread reader([&]() {
+        FlaggedDataEntry new_entry;
+        while (stream->Read(&new_entry)) {
+            // >>>-------(T)
+            std::cout << "recvd cid=" << new_entry.cid() << '\n';
+            std::cout << new_entry.entry() << "\n\n";
+            // <<<-------(T)
+            entries_recvd.push(new_entry);
+        }
+    });
+
+    // * Wait for thread completion before closing the stream
     writer.join();
+    reader.join();
     Status stat = stream->Finish();
 
     if (!stat.ok()) {
@@ -431,16 +454,16 @@ void SyncService::proc_entry_recvs() { // Database IO method
     //(!) debugg-o-vision   (!)     (!)     (!)
     // |
     // // manual entries_recvd filling so we can test this function
-    // UnflaggedDataEntry e11;
+    // FlaggedDataEntry e11;
     // e11.set_cid("111");
     // e11.set_entry("0|:|2022-04-16T20:28:03Z|:|111|:|hello, user1!, how's it going?");
-    // UnflaggedDataEntry e12;
+    // FlaggedDataEntry e12;
     // e12.set_cid("112");
     // e12.set_entry("0|:|2022-04-16T20:28:03Z|:|112|:|hello, user1 from 112!");
-    // UnflaggedDataEntry e21;
+    // FlaggedDataEntry e21;
     // e21.set_cid("222");
     // e21.set_entry("0|:|2022-04-16T20:28:07Z|:|222|:|user 2, I'm 222");
-    // UnflaggedDataEntry e22;
+    // FlaggedDataEntry e22;
     // e22.set_cid("221");
     // e22.set_entry("0|:|2022-04-16T20:28:07Z|:|221|:|Hi user 2, I've been trying to get a hold of you about your car's extended warranty!");
     // entries_recvd.push(e11);
@@ -455,7 +478,7 @@ void SyncService::proc_entry_recvs() { // Database IO method
     // * Write any forwards received to the the relevant users' timeline
     while (!entries_recvd.empty()) {
         // (!) we could save our pop for the end if there's some IO error
-        UnflaggedDataEntry ufdentry = entries_recvd.front();
+        FlaggedDataEntry ufdentry = entries_recvd.front();
         entries_recvd.pop();
 
         std::string sender = ufdentry.cid();
@@ -497,17 +520,10 @@ void SyncService::proc_entry_recvs() { // Database IO method
             // std::cout << "writing to timeline for cid=" << client_ << "\nentry=" << ufdentry.entry() << '\n';
             // +---(!)
             DatabaseIO::SyncService::write_fwd_to_timeline(sid, client_, ufdentry.entry(), "primary");
+            std::cout << "Wrote message receipts to timeline with server_flag=1\n"; //(!)
         }
     }
-
-    // * Check each .../$CID/sent_messages.data for new entries and populate next forward buffer
-    for (const ClientFollowingEntry& cfentry: local_client_table) {
-        std::vector<UnflaggedDataEntry> sent_msg_updates = DatabaseIO::SyncService::check_update_by_cid(sid, cfentry.cid, "primary");
-        for (int i = 0; i < sent_msg_updates.size(); ++i) {
-            entries_to_forward.push(sent_msg_updates[i]);
-        }
-    }
-    std::cout << "Wrote message receipts to timeline with server_flag=1\n";
+    std::cout << "End proc_entry_recvs\n";//(!)
 }
 
 void StartSyncService(std::string caddr_, std::string sid, std::string p) {
@@ -522,8 +538,8 @@ void StartSyncService(std::string caddr_, std::string sid, std::string p) {
         have the coordinator write all of these forwards on receipt
         have the coordinator send hardcoded forwards
     */
-
-    std::cout << "-(T)- End of testing: EntryForwardHandler\nexiting.\n";
+    synchro.test("Testing EntryForwardHandler\n");
+    std::cout << "-(T)-\nexiting.\n";
     exit(0);
     //    -------(T)
 }

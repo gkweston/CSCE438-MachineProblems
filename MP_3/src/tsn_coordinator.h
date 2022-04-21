@@ -2,9 +2,10 @@
 #include <queue>
 #include <algorithm>
 #include <vector>
+#include <unordered_set>
 
 #include "sns.grpc.pb.h"
-using csce438::UnflaggedDataEntry;
+using csce438::FlaggedDataEntry;
 
 enum ServerStatus { 
     ACTIVE, 
@@ -64,51 +65,34 @@ std::vector<std::string> split_string(std::string s, std::string delim=",") {
     parts.push_back(s);
     return parts;
 }
-std::unordered_set<std::string> parse_stream_init_msg(std::string init_entry, std::string& sid) {
-    // Set the cluster_id/sid for this SyncService, return a set of all clients
-    // which are being followed on this cluster for outbound msg forwards
+// std::unordered_set<std::string> parse_stream_init_msg(std::string init_entry, std::string& sid) { // --(!) DEPRECATED?
+//     // Set the cluster_id/sid for this SyncService, return a set of all clients
+//     // which are being followed on this cluster for outbound msg forwards
 
-	// * Parse message on delim=','
-	std::vector<std::string> parts = split_string(init_entry, ",");
+// 	// * Parse message on delim=','
+// 	std::vector<std::string> parts = split_string(init_entry, ",");
 
-	// * Extract the SID and set sid by reference
-	sid = parts[0];
+// 	// * Extract the SID and set sid by reference
+// 	sid = parts[0];
 
-	// * return the unordered set of followees for this cluster
-	std::unordered_set<std::string> followees;
-	for (int i = 1; i < parts.size(); ++i) {
-		followees.insert(parts[i]);
-	}
-	return followees;
-}
-
-/* 
-    refactor this to support:
-    ServerEntry {
-        primary_port
-        secondary_port
-        sync_port
-    }
-*/
-
-// For server routing tables
-// struct ServerEntry {
-//     std::string sid;        // cluster SID
-//     std::string hostname;
-//     std::string port;
-//     enum ServerStatus status;
-//     enum ServerType type;
-        
-//     bool operator==(const ServerEntry& e1) const {
-//         return sid == e1.sid;
-//     }
-// };
+// 	// * return the unordered set of followees for this cluster
+// 	std::unordered_set<std::string> followees;
+// 	for (int i = 1; i < parts.size(); ++i) {
+// 		followees.insert(parts[i]);
+// 	}
+// 	return followees;
+// }
 
 // (!) add an entry for clients served when we know we can keep a vector of elements
 struct ServerEntry {
     std::string sid; //cluster ID
     std::string hostname;
-    std::vector<std::string> clients_served;
+
+    // Using unordered set for faster lookups of forwarding
+    // std::vector<std::string> clients_served;
+    std::unordered_set<std::string> clients_served;
+    // These are entries which contain a user followed by someone in this cluster
+    std::queue<FlaggedDataEntry> forward_queue;
 
     std::string primary_port;
     std::string secondary_port;
@@ -141,71 +125,39 @@ struct ServerEntry {
     bool operator==(const ServerEntry& e1) const {
         return sid == e1.sid;
     }
+    bool is_serving_user_from_vec(const std::vector<std::string>& v) const {
+        for (const std::string& s: v) {
+            if (clients_served.find(s) != clients_served.end()) {
+                return true;
+            }
+        }
+        return false;
+    }
+    // bool is_serving(const std::string& user) {
+    //     return (std::find(clients_served.begin(), clients_served.end(), user) != clients_served.end());
+    // }
+    // bool is_serving_user(const std::string& user) {
+    //     // return (clients_served.)
+    //     return (clients_served.find(user) != clients_served.end());
+    // }
 };
 
-// For client routing table
+// For client routing table - this could be consolidated w/ server routing table, but this
+// makes CID->SID mappings easier to lookup
 struct ClientEntry {
     std::string cid;        // client ID
     std::string sid;        // assigned clusterID
+    std::vector<std::string> followers;
 
     ClientEntry(std::string client, std::string server) : cid(client), sid(server) { }
+    // bool is_followed_by(std::string user) {
+    //     return (std::find(followers.begin(), followers.end(), user) != followers.end());
+    // }
 };
 
 // Forward routing table --- may be refactored later
-struct ForwardEntry {
-    std::string cid;
-    std::queue<UnflaggedDataEntry> data_entries;
-};
+// struct ForwardEntry {
+//     std::string cid;
+//     std::queue<FlaggedDataEntry> data_entries;
+// };
 
-/*
-Forward Entry Stream
-Clusters = [1, 2, 3, 4]
-
-SS1 sends all new messages when it opens the stream (A, B, C)
-Coordinator buffers the messages as such
-
-    AllForwards = *A, *B, *C
-
-    ForwardTable
-    SID      | forwards
-    ---------+------------
-    1        |
-    2        | *A, *B, *C
-    3        | *A, *B, *C
-    4        | *A, *B, *C     
-
-Coordinator has no msgs to forward to SS1
-
-SS2 sends all msgs (D, E, F, G)
-
-Coordinator buffers
-    
-    AllForwards = *A, *B, *C, *D, *E, *F, *G
-
-    ForwardTable
-    SID      | forwards
-    ---------+------------
-    1        | *D, *E, *F, *G
-    2        | *A, *B, *C
-    3        | *A, *B, *C, *D, *E, *F, *G
-    4        | *A, *B, *C, *D, *E, *F, *G
-
-Coordinator has forwards for 2, and sends those
-Coord.send(SS2, {*A, *B, *C})
-
-    AllForwards = *A, *B, *C, *D, *E, *F, *G
-
-    ForwardTable
-    SID      | forwards
-    ---------+------------
-    1        | *D, *E, *F, *G
-    2        | 
-    3        | *A, *B, *C, *D, *E, *F, *G
-    4        | *A, *B, *C, *D, *E, *F, *G
-
-On each stream SSN sends an unordered_set of followees
-At each step of sending the forwards the coordinator checks
-    Does any client of SS2 follow *A->CID?
-
-Cap the AllForwards buffer at 100 messages and use a circular array implementation
-*/
