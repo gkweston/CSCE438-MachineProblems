@@ -1,8 +1,5 @@
 /*(!)
-    
-    - Swap the order that messages are rendered when client sees them
-    - Get rid of the newline for messages
-
+    - Always render 20 messages, even if blank
 (!)     */
 
 
@@ -12,12 +9,12 @@
 #include <string>
 #include <unistd.h>
 #include <ctime>
+#include <vector>
+#include <thread>
+#include <grpc++/grpc++.h>
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
 #include <google/protobuf/util/time_util.h>
-#include <grpc++/grpc++.h>
-#include <vector>
-#include <thread>
 
 #include "tsn_client.h"
 #include "sns.grpc.pb.h"
@@ -76,7 +73,6 @@ private:
     std::vector<std::string> parse_input_str(std::string in, std::string delim=" ");
 
     // For last 20 messages, this is hacky but whatever
-    // (!) turn into a queue
     std::vector<std::string> senderv;
     std::vector<std::string> messagev;
     std::vector<time_t> timev;
@@ -323,14 +319,17 @@ void Client::processTimeline() {
                 // * Clear screen
                 std::system("clear");
 
-                // * Print in backwards order
-                // for (int i = senderv.size() - 1; i >= 0; i--) {
-                //     displayPostMessage(senderv[i], messagev[i], timev[i]);
-                // }
+                // * Render messages
+                std::cout << "+-------\n";
                 for (int i = 0; i < senderv.size(); ++i) {
+                    std::cout << "| ";
                     displayPostMessage(senderv[i], messagev[i], timev[i]);
                 }
-                // displayPostMessage(post_user, post_msg, post_time);
+                int n_clear_space = 20 - senderv.size();
+                for (int i = 0; i < 20 - senderv.size(); ++i) {
+                    std::cout << "|\n";
+                }
+                std::cout << "+-------\n";
             }
         });
         reader.join();
