@@ -1,12 +1,16 @@
 /*
+
+"Pseudoclass" Schmokie File System
+
 The format of this (probably) breaks some header file management best-practices,
 but should not break the project. This may be refactored on delivery, or it may
 just be kept this way (because it works!)
 
-tsn_database is a pseudoclass to manage our tsn data on disc, it includes 3 
-namespaces and a few helpers, all wrapped in the namespace DatabaseIO
+tsn_database is a pseudoclass representing the Schmokie File System, which manages
+our tsn data on disc. It includes 3 namespaces and a few helpers, all wrapped in
+the namespace SchmokieFS for easy access and seperation.
 
-namespace SyncService
+namespace SchmokieFS::SyncService
     Manage the database files for the follower sync service, some of these files
     are shared with PrimaryServer, where they are marked below as
         Read:           S:[R]
@@ -14,22 +18,28 @@ namespace SyncService
         Exclusive:      S:<X>       -> where a distributed lock service is required
 
 
-namespace PrimaryServer
+namespace SchmokieFS::PrimaryServer
     Manage database files for the initial primary server which is prone to
     faults, files shared with SyncService, are marked below as
         Read:           P:[R]
         Write:          P:[W]
         Exclusive:      P:<X>       -> where a distributed lock service is required        
 
-namespace SecondaryServer
+namespace SchmokieFS::SecondaryServer
     Manage database files for the backup server which is brought online, reads
     ALL datastore/* files and primarily just calls stat() before copying the
     new version to it's file system directory
 
+    This is really any backup server which will run these methods. If Primary goes
+    offline, we simply promote a backup to Primary, which writes its all files
+    to the primary FS and assumes primary duties
 
-TSN FileSystem Schema:
+    This setup allows N Secondary servers which can act as failsafe, including an
+    old primary that comes back online.
 
-$GLOBAL_CWD/
+SchmokieFS Schema:
+
+$FS_CWD/
     datastore/
         $(CLUSTER_ID}/
             ${SERVER_TYPE}/
@@ -38,13 +48,14 @@ $GLOBAL_CWD/
                     ${CID}/
                         timeline.data       P:[RW]<X>, S:[W]<X>
                         sent_messages.tmp   P:[W]<X>, S:[R]<X>
-                        following.data      P:[W], S:[R]
-                        followers.data      P:[WR]<X>, S:[WR]<X>
+                        following.data      P:[WR], S:[R]            ---> All users this one is following
+                        
+                       -followers.data      P:[WR]<X>, S:[WR]<X>     ---> All users following this one tracked in Coordinator for now
 
-Each [R] technically writes a file, as it needs to flip the 1st io_flag byte
+Each P:[R] technically writes a file, as it needs to flip the 1st io_flag byte
 for each line, so it doesn't read this line again.
 
-io_flag is only used for PrimaryServer, and indicates a write has happened by
+IOflag is only used for PrimaryServer, and indicates a write has happened by
 another proccess which should be propogated by the server. After propogation,
 flip this leading byte to 0. SyncService now checks if fwds exists by checking
 if .../$CID/sent_messages.tmp exists, deleting after fwd. SecondaryServer simply
@@ -54,10 +65,15 @@ In some cases, we traverse this filesystem to collect metadata.
     e.g., to read all local clients on the server cluster, SyncService
     reads all filenames in datastore/$CLUSTER_ID/$SERVER_TYPE/local_clients/
 
-tl;dr
-    This should be it's own linked library at this point,
-    but it's easier to just #include it for now...
+NOTE:   We don't worry about file cleanup if a client disconnects. This could simply be
+        its own small cleanup-service. We also don't worry about unfollows at this stage.
+
+        This should be it's own linked library at this point,
+        but it's easier to just #include it (for now...)
 */
+
+//(!)(!)(!)(!)(!)(!)(!) pass params as "const T&" where possible (!)(!)(!)(!)(!)(!)(!)
+//(!)(!)(!)(!)(!)(!)(!) use check_mkdir(...)                      (!)(!)(!)(!)(!)(!)(!)
 
 #include <ctime>
 #include <cstdio>
@@ -84,10 +100,10 @@ using csce438::FlaggedDataEntry;
 
 #define FILE_DELIM (std::string("|:|"))
 
-namespace DatabaseIO {
+namespace SchmokieFS {
 
 // For file reads
-std::string GLOBAL_CWD = std::experimental::filesystem::current_path().string();
+std::string FS_CWD = std::experimental::filesystem::current_path().string();
 
 bool file_exists(const std::string& path_) {
     // Return true iff file exists at path_
@@ -102,7 +118,7 @@ static std::time_t to_time_t(const std::string& str, bool is_dst = false, const 
     ss >> std::get_time(&t, format.c_str());
     return mktime(&t);
 }
-std::vector<std::string> split_string(std::string s, std::string delim=FILE_DELIM) {
+std::vector<std::string> split_string(std::string s, std::string delim=FILE_DELIM) {    //(!) may be called elsewhere, replace w/ this (!)
     // Split a string on delim
     std::vector<std::string> parts;
     size_t pos = 0;
@@ -158,30 +174,48 @@ std::vector<std::string> get_file_diffs(std::string path_no_ext) { // used only 
     // * return vector of diff lines
     return diffd_entries;
 }
-
-Message entry_string_to_grpc_message(std::string entry_str) {
-    // parts = flag1|flag2|time|cid|msg
+Message entry_str_to_grpc_msg(std::string entry_str) {
+    // parts = flag1|time|cid|msg
     std::vector<std::string> parts = split_string(entry_str);
 
     Message msg;
-    if (parts.size() != 5) {
+    if (parts.size() != 4) {
         std::cout << "entry to gRPC ERR\n";//(!)
         msg.set_msg("ERROR");
         return msg;
     }
 
-    std::time_t ttime = to_time_t(parts[2]);
+    std::time_t ttime = to_time_t(parts[1]);
     Timestamp* timestamp = new Timestamp();
     *timestamp = google::protobuf::util::TimeUtil::TimeTToTimestamp(ttime);
     msg.set_allocated_timestamp(timestamp);
-    msg.set_username(parts[3]);
-    msg.set_msg(parts[4]);
+    msg.set_username(parts[2]);
+    msg.set_msg(parts[3]);
 
     return msg;
 }
+std::string grpc_msg_to_entry_str(const Message& msg_, std::string flag="1") {
+    // returns an entry formatted as FlaggedDataEntry, no newline
+    // 1|time|cid|msg
+    std::string time_ = google::protobuf::util::TimeUtil::ToString(msg_.timestamp());
+    std::string cid_ = msg_.username();
+    std::string umsg_ = msg_.msg();
+    return std::string(flag + FILE_DELIM + time_ + FILE_DELIM + cid_ + FILE_DELIM + umsg_);
+}
+bool check_mkdir(const std::string& path_) {
+    // * Check if file exists, if so, do nothing, else create it, print err
+    //   return false if err occurs
+    if ( !file_exists(path_) ) {
+        if ( !std::experimental::filesystem::create_directory(path_) ) {
+            std::cout << "Error on SchmokieFS::check_mkdir: " << path_ << '\n';//(!)
+            return false;
+        }	
+	}
+    return true;
+}
 
 namespace SyncService {
-    // May convert to class as DatabaseIO(sid, ..., etc.) (!)
+    // May convert to class as SchmokieFS(sid, ..., etc.) (!)
     /*
         Target functionallity
             - Read all clients on this cluster into memory
@@ -192,7 +226,7 @@ namespace SyncService {
                 @datastore/$SID/$SERVER_TYPE/local_clients/$CID/sent_messages.data
             - If sent_messages.tmp exists, read and return, delete sent_messages.tmp
                 @datastore/$SID/$SERVER_TYPE/local_clients/$CID/sent_messages.data
-            - Write received forwards to
+            - Write globally received forwards to
                 @datastore/$SID/$SERVER_TYPE/local_clients/$CID/timeline.data
             - Write received global users to
                 @datastore/$SID/$SERVER_TYPE/global_clients.data
@@ -207,7 +241,7 @@ namespace SyncService {
             return v;
         }
 
-        std::string path_ = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients";
+        std::string path_ = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients";
         std::vector<std::string> local_cids;
         for (const auto& dir : std::experimental::filesystem::directory_iterator(path_)) {
             //* Split and get only the last token which is CID
@@ -226,7 +260,7 @@ namespace SyncService {
         }
 
         // * Generate path string 
-        std::string path_ = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/following.data";
+        std::string path_ = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/following.data";
 
         // * Read all entries into vector
         std::ifstream ffollowing(path_);
@@ -252,7 +286,7 @@ namespace SyncService {
             std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::CHECK_UPDATE\n";//(!)
             return entries;
         } 
-        std::string fpath = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/sent_messages.tmp";
+        std::string fpath = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/sent_messages.tmp";
 
         // * If no $CID/sent_messages.tmp, then no new msgs to forward, return empty vec
         if (!file_exists(fpath)) {
@@ -299,7 +333,7 @@ namespace SyncService {
         }
 
         // * Generate path string corresponding to this user
-        std::string path_ = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/timeline.data";
+        std::string path_ = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/timeline.data";
 
         // * Fwds come as FlaggedDataEntry.entry(), set flag=1
         fwd[0]='1';
@@ -319,7 +353,7 @@ namespace SyncService {
         }
 
         // * Generate path string
-        std::string path_no_ext = GLOBAL_CWD + "/datastore/" + cluster_sid + "/" + stype + "/global_clients";
+        std::string path_no_ext = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/global_clients";
         std::string tfile = path_no_ext + ".tmp";
         // * Write to temp file
         std::ofstream fglob_client_tmp(tfile);
@@ -334,7 +368,7 @@ namespace SyncService {
 }   // end namespace SyncService
 
 namespace PrimaryServer {
-    // May want to convert to class in server as DatabaseIO(sid, ..., etc); (!)
+    // May want to convert to class in server as SchmokieFS(sid, ..., etc); (!)
     /*
         Target functionallity
             - Init filesystem for server cluster without disturbing any
@@ -348,7 +382,7 @@ namespace PrimaryServer {
             - Update user following.data when a valid FOLLOW command is issued for a
               local OR global user
                 @datastore/$SID/primary/local_clients/$CID/following.data
-            - Read in global clients to serve LIST command
+            - Read in global clients to serve LIST cmd and check FOLLOW cmds
                 @datastore/$SID/primary/global_clients.data
             - Read messages from user timeline where IOflag=1, set IOflag=0, to
               be served to the user in TIMELINE mode
@@ -357,20 +391,16 @@ namespace PrimaryServer {
               on local cluster
                 @datastore/$SID/primary/local_clients/$CID/timeline.data
     */
-    std::vector<Message> check_update(std::string fname) {
-
-        // (!) fname should inclue *_timeline.dat
-
+    std::vector<Message> check_timeline_updates(const std::string& sid, const std::string& cid) {
         /*
-            Get new messages on users timeline corresponding to fname
-
-            Only taking fname (not cid) here allows the server/service of whatever
-            type to iterate all CIDs and generate fnames to check updates from
+            Get new messages on users timeline at datastore/$SID/primary/local_clients/$CID/timeline.data
+            which will then be served to the user.
         */
         std::vector<Message> new_messages;
 
-        // * Get file diff liens
-        std::vector<std::string> file_diffs = get_file_diffs(fname);
+        // * Get file diffs
+        std::string path_no_ext = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid + "/timeline";
+        std::vector<std::string> file_diffs = get_file_diffs(path_no_ext);
         // * If no diffs, return empty vec
         size_t n_diffs = file_diffs.size();
         if (n_diffs == 0) {
@@ -382,7 +412,7 @@ namespace PrimaryServer {
                 continue;
             }
 
-            Message new_msg = entry_string_to_grpc_message(file_diffs[i]);
+            Message new_msg = entry_str_to_grpc_msg(file_diffs[i]);
             if (new_msg.msg() == "ERROR") {
                 continue;
             }
@@ -390,50 +420,142 @@ namespace PrimaryServer {
         }
         return new_messages;
     }
-    void init_server_fs(std::string sid) {
-        std::string sid_path = GLOBAL_CWD + "/datastore/" + sid + "/";
+    void init_server_fs(const std::string& sid) { // (!) might want to propogate std::filesystem errors
+        /* Called on server registration, initialize our file system */
+        std::string sid_path = FS_CWD + "/datastore/" + sid;
+
         // * Check if an .../$SID/ DNE, create one
         if (!file_exists(sid_path)) {
-            // delete the old .../$SID/primary
             if (!std::experimental::filesystem::create_directory(sid_path)) {
                 std::cout << "Error on init_primary_fs create_directory for $SID/\n";//(!)
             }	
         }
-        // * Check if an .../$SID/primary exists that's not ours
-        if (file_exists(sid_path + "primary")) {
-            // delete the old .../$SID/primary
-            std::experimental::filesystem::remove_all(sid_path + "primary");
+        
+
+        // * Check if an old .../$SID/primary exists, this may be an old server coming back online
+        std::string prim_path = sid_path + "/primary";
+        if (!file_exists(prim_path)) {
+            // * Make our .../$SID/primary/ if it DNE
+            if (!std::experimental::filesystem::create_directory(prim_path)) {
+                std::cout << "Error on init_primary_fs create_directory for $SID/primary\n";//(!)
+            }	
         }
-        // * Make our .../$SID/primary/
-        if (!std::experimental::filesystem::create_directory(sid_path + "primary")) {
-            std::cout << "Error on init_primary_fs create_directory for $SID/primary\n";//(!)
+        
+        // * Do the same for .../$SID/primary/local_clients
+        std::string loc_cli_path = prim_path + "/local_clients";
+        if (!file_exists(loc_cli_path)) {
+            // * Make our .../$SID/primary/local_clients
+            if (!std::experimental::filesystem::create_directory(loc_cli_path)) {
+                std::cout << "Error on init_primary_fs create_directory for $SID/primary/local_clients\n";//(!)
+            }
         }
-        // * Make our .../$SID/primary/local_clients
-        if (!std::experimental::filesystem::create_directory(sid_path + "primary/local_clients")) {
-            std::cout << "Error on init_primary_fs create_directory for $SID/primary/local_clients\n";//(!)
-        }
+        
         // We should now have .../$SID/primary with or without $SID/secondary without
         // disturbing secondary's files if they exist
     }
-    void init_client_fs(std::string sid, std::string cid) {
+    void init_client_fs(const std::string& sid, const std::string& cid) { // (!) might want to propogate std::filesystem errors
+        /* 
+            On client connection, we want to generate datastore/$SID/primary/local_clients/$CID/
+            init_primary_fs should always be called before this
+        */
 
+        std::string client_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid;
+        // * If the .../$CID file already exists, do nothing. This may be a client disco that
+        //   we want to maintain
+        if (!file_exists(client_path_)) {
+            // * File DNE, go ahead and make one
+            if (!std::experimental::filesystem::create_directory(client_path_)) {
+                std::cout << "Error on init_client_fs make new\n";//(!)
+            }	
+        }
     }
-    void write_to_sent_messages(std::string sid, std::string cid, std::string msg) {
-        // msg must be composed like as a FlaggedDataEntry in the file
-    }
-    void add_to_following(std::string sid, std::string local_follower_cid, std::string global_followee_cid) {
+    void write_to_sent_msgs(const std::string& sid, const std::string& cid, const Message& msg) {
+        /*
+            Takes a single msg
+            Msg must be composed like as a FlaggedDataEntry in the file
+        */
+        std::string sent_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid + "/sent_messages.tmp";
 
-    }
-    std::vector<std::string> read_global_clients(std::string sid) {
+        // * Compose like a FlaggedDataEntry
+        std::string entry_str = grpc_msg_to_entry_str(msg);
 
-    }
-    std::vector<FlaggedDataEntry> read_new_timeline_msgs(std::string sid, std::string cid) {
+        // * Open sent_messages.tmp in append mode
+        std::ofstream data_stream(sent_path_, std::ios::app);
 
+        // * Write message with newline
+        data_stream << entry_str << '\n';
     }
-    void write_local_msg_to_timeline(std::string sid, std::string cid_to_recv, std::string msg) {
-        // msg must be composed like as a FlaggedDataEntry in the file
-        // for local user to local user on this cluster
-        // write where IOflag=0 because we will have already routed a local msg to the user
+    
+
+/* (!)(T)------- TESTED TO HERE -------(T)(!) */
+
+
+    void write_to_sent_msgs(std::string sid, std::string cid, const std::vector<Message>& msgs) { //(!)--- will be used??
+        /* Overloaded to read from a vector of msgs */
+        std::cout << "impl overloaded SchmokieFS::PrimaryServer::write_to_sent_msgs(std::vector)\n";
+        return;
+    }
+    void add_to_following(const std::string& sid, const std::string& follower_cid, const std::string& followee_cid) {
+        /*
+            Updates the following.data which the server backs up in case of fault, this information
+            is served to the user in the LIST command.
+
+            NOTE: Clusters do not track followers, this is tracked by coordinator since it is fault
+            proof. In reality we would want to track it, which is a pretty easy change to make
+            and adds 1 RPC to Server->Coordinator. But this is coordinator fault-tolerance territory
+            which is out-of-scope for this assignment.
+        */
+
+        std::string following_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + follower_cid + "/following.data" ;
+        // * Open file and append followee_cid to this file, if it DNE we will create it here, close file
+        std::ofstream data_stream(following_path_, std::ios::app);
+        data_stream << followee_cid << '\n';
+    }
+    std::vector<std::string> read_global_clients(const std::string& sid) {
+        /*
+            Read in from global_clients.data, this is used to populate the LIST command and tell
+            the user who they can follow
+        */
+        std::string glob_cli_path_ = FS_CWD + "/datastore/" + sid + "/primary/global_clients.data";
+        // * Read into memory all clients in the file
+        std::ifstream data_stream(glob_cli_path_);
+        std::string line;
+        std::vector<std::string> glob_clients;
+        while( getline(data_stream, line) ) {
+            glob_clients.push_back(line);
+        }
+        return glob_clients;
+    }
+    void write_local_msg_to_timeline(const std::string& sid, const std::string& cid_to_recv, const Message& msg) {
+        /*
+            Write a msg composed as a FlaggedDataEntry to the timeline.data file, this message is a
+            local one which the server has already served to the user. Write where IOflag=0 so we
+            don't serve duplicates to the user.
+        */
+        std::string timeline_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid_to_recv + "/timeline.data";
+        // * Open .../$CID/timeline.data if exists, if not create new one
+        std::ofstream data_stream(timeline_path_, std::ios::app);
+
+        // * Convert Message to FlaggedDataEntry format
+        std::string entry = grpc_msg_to_entry_str(msg, "0");
+
+        // * Append this entry to the users timeline
+        data_stream << entry << '\n';
+    }
+    std::vector<Message> read_new_timeline_msgs(const std::string& sid, const std::string& cid) {
+        /*
+            Read in timeline entries where IOflag=1, flip this flag to zero, these messages will
+            then be served to the user. These messages are those placed by the sync service which
+            originate from a user outside of this cluster.
+        */
+        std::string timeline_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid + "/timeline.data";
+        // * If timeline DNE, do nothing
+        if (!file_exists(timeline_path_)) {
+            return std::vector<Message>();
+        }
+
+        // * Read get all entries as Message where IOflag=1, flip to zero and return these Messages to be served to user
+        return check_timeline_updates(sid, cid);
     }
 }   // end namespace PrimaryServer
 
@@ -467,4 +589,4 @@ namespace SecondaryServer {
 
 }   // end namespace SecondaryServer
 
-}   // end namespace DatabaseIO
+}   // end namespace SchmokieFS

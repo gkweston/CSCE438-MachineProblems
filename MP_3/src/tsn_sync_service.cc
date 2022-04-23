@@ -1,4 +1,5 @@
-/*
+/* ------- sync service ------- */
+/* (!)
     Start this by reading in all messages for ${UID}.txt
     keep { TIME | UID | MSG } in memory
 
@@ -136,43 +137,37 @@ class SyncService {
     void Spin();
     
 public:
-    SyncService(const std::string& caddr, const std::string& host, const std::string& p, const std::string& id) 
-        : coord_addr(caddr), hostname(host), port(p), sid(id) {
-        // Init stub
-        coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
-            SNSCoordinatorService::NewStub(
-                grpc::CreateChannel(
-                    coord_addr, grpc::InsecureChannelCredentials()
-                )
-            )
-        );
-
-        // Issure RPC to register with the coordinator
-        // Fill RPC
-        Registration reg;
-        reg.set_sid(sid);
-        reg.set_hostname(host);
-        reg.set_port(port);
-        reg.set_type("SYNCSERVICE");
-
-        RegisterWithCoordinator(reg);
-                
-        // Issue RPC to get global clients and write to file (X)
-        UpdateGlobalClientTable();
-        
-        // Issue databaseIO to get local clients into memory
-        update_local_client_table();
-
-        Spin();
-    }
-    // <<<-------(T)(!)
-    void test(std::string msg) {
-        std::cout << msg << '\n';
-        EntryForwardHandler();
-        std::cout << "---end test---\n";
-    }
-    // >>>-------(T)(!)
+    SyncService(const std::string& caddr, const std::string& host, const std::string& p, const std::string& id);
 };
+SyncService::SyncService(const std::string& caddr, const std::string& host, const std::string& p, const std::string& id) 
+    : coord_addr(caddr), hostname(host), port(p), sid(id) {
+    // Init stub
+    coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
+        SNSCoordinatorService::NewStub(
+            grpc::CreateChannel(
+                coord_addr, grpc::InsecureChannelCredentials()
+            )
+        )
+    );
+
+    // Issure RPC to register with the coordinator
+    // Fill RPC
+    Registration reg;
+    reg.set_sid(sid);
+    reg.set_hostname(host);
+    reg.set_port(port);
+    reg.set_type("SYNCSERVICE");
+
+    RegisterWithCoordinator(reg);
+            
+    // Issue RPC to get global clients and write to file (X)
+    UpdateGlobalClientTable();
+    
+    // Issue SchmokieFS to get local clients into memory
+    update_local_client_table();
+
+    Spin();
+}
 void SyncService::Spin() {
     while (true) {
         std::cout << "Issuing spin cycle! then sleeping for " << SLEEP_MS << '\n';//(!)
@@ -240,10 +235,15 @@ void SyncService::UpdateGlobalClientTable() {
     // +---(!)
 
     // * Write to .../$CLUSTER_ID/$SERVER_TYPE/global_clients.data
-    DatabaseIO::SyncService::write_global_clients(sid, global_client_table, "primary");
+    SchmokieFS::SyncService::write_global_clients(sid, global_client_table, "primary");
     std::cout << "Updated global clients in memory and on cluster disc\n";//(!)
 }
 void SyncService::check_new_local_msgs() {
+    /*
+        Check for outbound client messages in .../$CID/sent_messages.tmp and read them into
+        memory. Remove this file so we don't double send. These messages are buffered
+        next time we do a forward exchange with the coordinator.
+    */
     //(!) debuggovision
     // |
     // std::cout << "size entries_to_forward before:" << entries_to_forward.size() << "\n";//(!)
@@ -255,8 +255,8 @@ void SyncService::check_new_local_msgs() {
 
     // * For each local client, check if there are new outbound message(s)
     for (const ClientFollowingEntry& client_: local_client_table) {
-        // std::vector<FlaggedDataEntry> new_entries = DatabaseIO::SyncService::check_update_by_cid(sid,client_.cid, "primary");
-        std::vector<FlaggedDataEntry> new_entries = DatabaseIO::SyncService::check_sent_by_cid(sid, client_.cid, "primary");
+        // std::vector<FlaggedDataEntry> new_entries = SchmokieFS::SyncService::check_update_by_cid(sid,client_.cid, "primary");
+        std::vector<FlaggedDataEntry> new_entries = SchmokieFS::SyncService::check_sent_by_cid(sid, client_.cid, "primary");
         // * Buffer each message to be forwarded later
         for (int i = 0; i < new_entries.size(); ++i) {
             entries_to_forward.push(new_entries[i]);
@@ -385,11 +385,11 @@ void SyncService::update_local_client_table() {
     // or as-slow-as just clearing the table and generating from scratch
 
     // * Get all CIDs in this cluster
-    std::vector<std::string> local_clients = DatabaseIO::SyncService::read_local_cids_from_fs(sid, "primary");
+    std::vector<std::string> local_clients = SchmokieFS::SyncService::read_local_cids_from_fs(sid, "primary");
 
     // * For each CID in this cluster, read in their followers
     for (const std::string& client_: local_clients) {
-        std::vector<std::string> following_ = DatabaseIO::SyncService::read_following_by_cid(sid, client_, "primary");
+        std::vector<std::string> following_ = SchmokieFS::SyncService::read_following_by_cid(sid, client_, "primary");
 
         // * Check if client following entry in table - if not, add to table
         ClientFollowingEntry* cfentry = get_client_following_entry(client_);
@@ -470,10 +470,7 @@ void SyncService::proc_entry_recvs() { // Database IO method
         std::string sender = ufdentry.cid();
         std::vector<std::string> clients_who_follow_sender = get_clients_who_follow(sender);
         
-        // vvv (!)      (!)     (!) vvv
-        // 
-        // coordinator doesn't ACTUALLY know who follows who, it just multicasts ALL forwards
-        //  
+
         // * If the coordinator forwarded us a msg for which we don't have a receiver, there must
         //   have been a client to register w/ coordinator since the last time we updates local_clients_table
         //   do that now, and if still none - just throw msg away (for now)
@@ -488,7 +485,6 @@ void SyncService::proc_entry_recvs() { // Database IO method
                 continue;
             }
         }
-        // ^^^ (!)      (!)     (!) ^^^
 
         //(!) debugg-o-vision   (!)     (!)     (!)
         // |
@@ -505,7 +501,7 @@ void SyncService::proc_entry_recvs() { // Database IO method
             // |
             // std::cout << "writing to timeline for cid=" << client_ << "\nentry=" << ufdentry.entry() << '\n';
             // +---(!)
-            DatabaseIO::SyncService::write_fwd_to_timeline(sid, client_, ufdentry.entry(), "primary");
+            SchmokieFS::SyncService::write_fwd_to_timeline(sid, client_, ufdentry.entry(), "primary");
             std::cout << "Wrote message receipts to timeline with server_flag=1\n"; //(!)
         }
     }
@@ -547,8 +543,7 @@ int main(int argc, char** argv) {
         }
     }
     
-    // write hardcoded test functions for sync
-    // StartSyncService(coord, serverID, port);
+    // Start sync service which spins inside the constructor
     SyncService synchro(coord, DEFAULT_HOST, port, serverID);
     return 0;
 }

@@ -1,16 +1,19 @@
 Directory structuring for binaries (excluding sourcecode)
 
     src/
-        tsc
-        tsd
+        tsn_client
+        tsn_server
         tsn_coordinator
         tsn_sync_service
         datastore/
-            ${SERVER_TYPE}_${SERVER_ID}/
-                server_context.data
-                user_timelines.data
-            ...
-                ...
+            ${CLUSTER_ID}/
+                ${SERVER_TYPE}/
+                    global_clients.data
+                    local_clients/
+                        ${CID}/
+                            timeline.data
+                            *sent_messages.tmp
+                            following.data
 
 ```
 Notes:

@@ -1,4 +1,6 @@
-/*
+/* ------- coordinator ------- */
+
+/* (!)(!)(!)
 Notes:
     Step 1
     * Wait for connection requests from clients
@@ -40,8 +42,8 @@ using csce438::SNSCoordinatorService;
 
 // Userful for debugging, ex: if 2 we only assign users to sid=[1|2]
 // but other servers can still be registered and exist
-#define N_SERVERS (1)
-#define DEFAULT_HOST (std::string("0.0.0.0"))
+#define N_SERVERS       (1)
+#define DEFAULT_HOST    (std::string("0.0.0.0"))
 
 class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
 private:
@@ -81,10 +83,13 @@ public:
         }
 
         // * Set repl message to success or failure
-        repl->set_msg("SERVER REGISTERED");
+        repl->set_msg("200");
         return Status::OK;
     }
     Status FollowUpdate(ServerContext* ctx, const Request* req, Reply* repl) override {
+        // Kept in mem on the coordinator, these are followers across clusters
+        // given that the server can take care of local message routing
+        
         // Comes as req.username=cid, req.arguments[0]=user to follow
         std::string follower = req->username();
         std::string followee = req->arguments(0);
@@ -310,6 +315,10 @@ int main(int argc, char** argv) {
         std::cout << "./tsn_coordinator -p <port>\n\n";
         return 0;
     }
+
+    // (!)(!)
+    std::cout << "\nWARNING: Is ./datastore/* clear??\n\n";// (!)(!)
+    // (!)(!)
 
     std::string port = "3010";
     int opt = 0;

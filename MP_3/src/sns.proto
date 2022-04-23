@@ -37,17 +37,17 @@ import "google/protobuf/timestamp.proto";
 service SNSService{
 
 	rpc Login (Request) returns (Reply) {}
-	rpc List (Request) returns (ListReply) {}
+	rpc List (Request) returns (Reply) {}
 	rpc Follow (Request) returns (Reply) {}
 	rpc UnFollow (Request) returns (Reply) {}
 	// Bidirectional streaming RPC
 	rpc Timeline (stream Message) returns (stream Message) {} 
 }
 
-message ListReply {
-	repeated string all_users = 1;
-	repeated string followers = 2;
-}
+// message ListReply {
+// 	repeated string all_users = 1;
+// 	repeated string followers = 2;
+// }
 
 message Request {
 	string username = 1;
@@ -56,6 +56,8 @@ message Request {
 
 message Reply {
 	string msg = 1;
+	repeated string all_users = 2;
+	repeated string following_users = 3;
 }
 
 message Message {
