@@ -146,8 +146,13 @@ IStatus Client::parse_comm_status(std::string msg) { // one way to do it...
         return IStatus::FAILURE_INVALID_USERNAME;
     else if (msg == "FAILURE_INVALID")
         return IStatus::FAILURE_INVALID;
-    else    
+    else {
+        //(!)-------------------------------------------------(!)
+        std::cout << "parse_comm_failure msg=" << msg << "\n";
+        //(!)-------------------------------------------------(!)
         return IStatus::FAILURE_UNKNOWN;
+    }
+
 }
 IReply Client::processCommand(std::string& input)
 {
@@ -184,6 +189,9 @@ IReply Client::processCommand(std::string& input)
         if (stat.ok()) {
             irepl.comm_status = parse_comm_status(repl.msg());
         } else {
+            //(!)-------------------------------------------------(!)
+            std::cout << "gRPC::Status not ok\n";
+            //(!)-------------------------------------------------(!)
             irepl.comm_status = FAILURE_UNKNOWN; // connection probably terminated on user's end
         }
 
@@ -216,6 +224,9 @@ IReply Client::processCommand(std::string& input)
         if (stat.ok()) {
             irepl.comm_status = parse_comm_status(repl.msg());
         } else {
+            //(!)-------------------------------------------------(!)
+            std::cout << "gRPC::Status not ok\n";
+            //(!)-------------------------------------------------(!)
             irepl.comm_status = FAILURE_UNKNOWN;
         }
             

@@ -44,13 +44,12 @@ $FS_CWD/
         $(CLUSTER_ID}/
             ${SERVER_TYPE}/
                 global_clients.data         P:[R], S:[W]
+                sent_messages.tmp           P:[W]<X>, S:[R]<X>
                 local_clients/
                     ${CID}/
                         timeline.data       P:[RW]<X>, S:[W]<X>
-                        sent_messages.tmp   P:[W]<X>, S:[R]<X>
-                        following.data      P:[WR], S:[R]            ---> All users this one is following
-                        
-                       -followers.data      P:[WR]<X>, S:[WR]<X>     ---> All users following this one tracked in Coordinator for now
+                        following.data      P:[WR], S:[R]               ---(!) DEPRECATED
+                        followers.data      P:[WR]<X>, S:[WR]<X>
 
 Each P:[R] technically writes a file, as it needs to flip the 1st io_flag byte
 for each line, so it doesn't read this line again.
@@ -230,6 +229,8 @@ namespace SyncService {
                 @datastore/$SID/$SERVER_TYPE/local_clients/$CID/timeline.data
             - Write received global users to
                 @datastore/$SID/$SERVER_TYPE/global_clients.data
+            - Write all followers to
+                @datastore/$SID/$SERVER_TYPE/local_clients/$CID/followers.data
     */
 
     std::vector<std::string> read_local_cids_from_fs(std::string cluster_sid, std::string stype="primary") {
@@ -250,17 +251,17 @@ namespace SyncService {
         }
         return local_cids;
     }
-    std::vector<std::string> read_following_by_cid(std::string cluster_sid, std::string cid, std::string stype="primary") {
+    std::vector<std::string> read_followers_by_cid(std::string cluster_sid, std::string cid, std::string stype="primary") {
         // - For a given CID read all following into memory
         //     @datastore/$SID/$SERVER_TYPE/local_clients/$CID/following.txt        
         if (stype != "primary" && stype != "secondary") { //(!)
-            std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::READ_FOLLOWING_BY_CID\n";//(!)
+            std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::READ_FOLLOWERS_BY_CID\n";//(!)
             std::vector<std::string> v;
             return v;
         }
 
         // * Generate path string 
-        std::string path_ = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/following.data";
+        std::string path_ = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/followers.data";
 
         // * Read all entries into vector
         std::ifstream ffollowing(path_);
@@ -276,25 +277,31 @@ namespace SyncService {
         // * Pass it back to caller
         return following;
     }
-    std::vector<FlaggedDataEntry> check_sent_by_cid(std::string cluster_sid, std::string cid, std::string stype="primary") {
+    std::vector<FlaggedDataEntry> gather_sent_msgs(std::string cluster_sid, std::string stype="primary") {
+
+        /*
+            NEW VERSION IS UNTESTED!!!
+        */
+
         // - If sent_messages.tmp exists, read and return, delete sent_messages.tmp
         //     @datastore/$SID/$SERVER_TYPE/local_clients/$CID/sent_messages.data
         // Return a vector of FlaggedDataEntry iff there are messages to forward, and no errors occur
         // else return an empty vector
-        std::vector<FlaggedDataEntry> entries;
+        
         if (stype != "primary" && stype != "secondary") { //(!)
             std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::CHECK_UPDATE\n";//(!)
-            return entries;
+            return std::vector<FlaggedDataEntry>();
         } 
-        std::string fpath = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/sent_messages.tmp";
+        // std::string fpath = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/sent_messages.tmp";
+        std::string fpath = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/sent_messages.tmp";
 
         // * If no $CID/sent_messages.tmp, then no new msgs to forward, return empty vec
         if (!file_exists(fpath)) {
-            return entries;
+            return std::vector<FlaggedDataEntry>();
         }
 
         // <X> lock acquire
-        // * If $CID/sent_messages.tmp exists, there are new messages to forward
+        // * If $SID/sent_messages.tmp exists, there are new messages to forward
         //   Read file contents into mem as FlaggedDataEntry
         std::string line;
         std::ifstream data_stream(fpath);
@@ -313,9 +320,14 @@ namespace SyncService {
         // <X> lock release
 
         // * Process into FlaggedDataEntry
+        std::vector<FlaggedDataEntry> entries;
         for(const std::string& s: fdata) {
+            // * Extract CID from entry
+            std::string sender_cid = split_string(s, FILE_DELIM)[2];
+
+            // * Compose
             FlaggedDataEntry e;
-            e.set_cid(cid);
+            e.set_cid(sender_cid);
             e.set_entry(s);
             entries.push_back(e);
         }
@@ -362,6 +374,24 @@ namespace SyncService {
         }
         // * Rename temp file
         std::string dfile = path_no_ext + ".data";
+        rename(tfile.c_str(), dfile.c_str());
+    }
+    void update_followers(const std::string& cluster_sid, const std::string& cid, const std::vector<std::string>& followers, std::string stype="primary") {
+        if (stype != "primary" && stype != "secondary") { //(!)
+            std::cout << "ERR INPUT STYPE ON DATABASE::SYNCSERVICE::WRITE_GLOBAL_CLIENTS\n";//(!)
+            std::cout << "got stype=" << stype << "\n\n";//(!)
+            return;
+        }
+        // * gen path string
+        std::string path_no_ext_ = FS_CWD + "/datastore/" + cluster_sid + "/" + stype + "/local_clients/" + cid + "/followers";
+        // * write to temp file
+        std::string tfile = path_no_ext_ + ".tmp";
+        std::ofstream data_stream(tfile);
+        for (const std::string& u: followers) {
+            data_stream << u << '\n';
+        }
+        // * rename temp file, placing or overwriting
+        std::string dfile = path_no_ext_ + ".data";
         rename(tfile.c_str(), dfile.c_str());
     }
 
@@ -468,13 +498,18 @@ namespace PrimaryServer {
                 std::cout << "Error on init_client_fs make new\n";//(!)
             }	
         }
+        std::cout << "init_client_fs successful\n";//(!)(!)
     }
-    void write_to_sent_msgs(const std::string& sid, const std::string& cid, const Message& msg) {
+
+/* (!)(T)------- TESTED TO HERE -------(T)(!) */
+
+    // RE(!) update to .../$SID/primary/sent_messages.tmp
+    void write_to_sent_msgs(const std::string& sid, const Message& msg) {
         /*
             Takes a single msg
             Msg must be composed like as a FlaggedDataEntry in the file
         */
-        std::string sent_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid + "/sent_messages.tmp";
+        std::string sent_path_ = FS_CWD + "/datastore/" + sid + "/primary/sent_messages.tmp";
 
         // * Compose like a FlaggedDataEntry
         std::string entry_str = grpc_msg_to_entry_str(msg);
@@ -486,31 +521,24 @@ namespace PrimaryServer {
         data_stream << entry_str << '\n';
     }
     
+    
+    // void add_to_following(const std::string& sid, const std::string& follower_cid, const std::string& followee_cid) { // ---(!) DEPRECATED ?
+    //     /*
+    //         Updates the following.data which the server backs up in case of fault, this information
+    //         is served to the user in the LIST command.
 
-/* (!)(T)------- TESTED TO HERE -------(T)(!) */
+    //         NOTE: Clusters do not track followers, this is tracked by coordinator since it is fault
+    //         proof. In reality we would want to track it, which is a pretty easy change to make
+    //         and adds 1 RPC to Server->Coordinator. But this is coordinator fault-tolerance territory
+    //         which is out-of-scope for this assignment.
+    //     */
 
+    //     std::string following_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + follower_cid + "/following.data" ;
+    //     // * Open file and append followee_cid to this file, if it DNE we will create it here, close file
+    //     std::ofstream data_stream(following_path_, std::ios::app);
+    //     data_stream << followee_cid << '\n';
+    // }
 
-    void write_to_sent_msgs(std::string sid, std::string cid, const std::vector<Message>& msgs) { //(!)--- will be used??
-        /* Overloaded to read from a vector of msgs */
-        std::cout << "impl overloaded SchmokieFS::PrimaryServer::write_to_sent_msgs(std::vector)\n";
-        return;
-    }
-    void add_to_following(const std::string& sid, const std::string& follower_cid, const std::string& followee_cid) {
-        /*
-            Updates the following.data which the server backs up in case of fault, this information
-            is served to the user in the LIST command.
-
-            NOTE: Clusters do not track followers, this is tracked by coordinator since it is fault
-            proof. In reality we would want to track it, which is a pretty easy change to make
-            and adds 1 RPC to Server->Coordinator. But this is coordinator fault-tolerance territory
-            which is out-of-scope for this assignment.
-        */
-
-        std::string following_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + follower_cid + "/following.data" ;
-        // * Open file and append followee_cid to this file, if it DNE we will create it here, close file
-        std::ofstream data_stream(following_path_, std::ios::app);
-        data_stream << followee_cid << '\n';
-    }
     std::vector<std::string> read_global_clients(const std::string& sid) {
         /*
             Read in from global_clients.data, this is used to populate the LIST command and tell
@@ -526,22 +554,23 @@ namespace PrimaryServer {
         }
         return glob_clients;
     }
-    void write_local_msg_to_timeline(const std::string& sid, const std::string& cid_to_recv, const Message& msg) {
-        /*
-            Write a msg composed as a FlaggedDataEntry to the timeline.data file, this message is a
-            local one which the server has already served to the user. Write where IOflag=0 so we
-            don't serve duplicates to the user.
-        */
-        std::string timeline_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid_to_recv + "/timeline.data";
-        // * Open .../$CID/timeline.data if exists, if not create new one
-        std::ofstream data_stream(timeline_path_, std::ios::app);
+    
+    // void write_local_msg_to_timeline(const std::string& sid, const std::string& cid_to_recv, const Message& msg) { // ---(!) DEPRECATED ?
+    //     /*
+    //         Write a msg composed as a FlaggedDataEntry to the timeline.data file, this message is a
+    //         local one which the server has already served to the user. Write where IOflag=0 so we
+    //         don't serve duplicates to the user.
+    //     */
+    //     std::string timeline_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid_to_recv + "/timeline.data";
+    //     // * Open .../$CID/timeline.data if exists, if not create new one
+    //     std::ofstream data_stream(timeline_path_, std::ios::app);
 
-        // * Convert Message to FlaggedDataEntry format
-        std::string entry = grpc_msg_to_entry_str(msg, "0");
+    //     // * Convert Message to FlaggedDataEntry format
+    //     std::string entry = grpc_msg_to_entry_str(msg, "0");
 
-        // * Append this entry to the users timeline
-        data_stream << entry << '\n';
-    }
+    //     // * Append this entry to the users timeline
+    //     data_stream << entry << '\n';
+    // }
     std::vector<Message> read_new_timeline_msgs(const std::string& sid, const std::string& cid) {
         /*
             Read in timeline entries where IOflag=1, flip this flag to zero, these messages will

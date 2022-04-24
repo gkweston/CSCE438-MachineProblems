@@ -86,10 +86,12 @@ service SNSCoordinatorService {
 	rpc RegisterSyncService (Registration) returns (Reply) {}
 	// Respond with all registered users for all server clusters
 	rpc FetchGlobalClients (Request) returns (GlobalUsers) {}
+	// Respond with all followers for given user
+	rpc FetchFollowers (Request) returns (Reply) {}
 	// Issued by a SyncService, forward messages TO coordinator, then waits
 	// for any messages forwarded FROM coordinator. Stream is unique to this call.
 	// (!) can be simplified as a SetOfForwards each way
-	rpc ForwardEntryStream (stream FlaggedDataEntry) returns (stream FlaggedDataEntry) {}
+	rpc ForwardEntryStream (stream Forward) returns (stream Forward) {}
 }
 // For registering server w/ coordinator
 message Registration {
@@ -114,5 +116,10 @@ message FlaggedDataEntry {
 	// simplifies msg routing
 	string cid = 1;
 	// entry = { 1|:|TIME|:|CID|:|MSG }
+	string entry = 2;
+}
+
+message Forward {
+	repeated string cid = 1;
 	string entry = 2;
 }

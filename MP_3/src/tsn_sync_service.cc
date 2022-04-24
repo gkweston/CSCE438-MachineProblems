@@ -46,60 +46,17 @@ using csce438::Request;
 using csce438::GlobalUsers;
 using csce438::Registration;
 using csce438::Reply;
+using csce438::Forward;
 using csce438::FlaggedDataEntry;
 using csce438::SNSCoordinatorService;
 
 #define DEFAULT_HOST    (std::string("0.0.0.0"))
-#define SLEEP_MS        (5000)
+#define SLEEP_MS        (7000)
 
-/*
-    (!) could really benefit from multithreading
-    @init:
-    1.  Register self with coordinator
-    2.  Read all local clients in memory from
-            .../$CLUSTER_ID/primary/local_clients/*
-    3.  Fetch all global users, write to
-            .../$CLUSTER_ID/primary/global_clients.data
-    4.  Start P1, P2
-
-    --- P1 (~Thread1?) ---
-    Check for new messages, forward to coord
-    1.  Update local clients in memory from
-            .../$CLUSTER_ID/primary/local_clients/*
-    
-    2.  For each CID, periodically check
-            datastore/$CLUSTER_ID/primary/$CID/sent_messages.data
-        for new messages
-
-    3.  For each new message, forward to coordinator as FlaggedDataEntry for routing
-
-    --- P2 (~Thread2) ---
-    Recvd new messages, pass to user's timeline file
-    1.  Update clients in memory from
-            .../$CLUSTER_ID/primary/local_clients/*
-
-    2.  Wait until receipt of new message from coordinator
-
-    3.  For each new message from coordinator, write to:
-            .../$CLUSTER_ID/primary/$CID/timeline.data
-        with server_flag=1
-*/
-
-/*
-    For this step focus on:
-
-    a. Coordinator tracks CID->ClusterID
-    b. SyncService inits by issuing FetchGlobalUsers
-
-    command line args:
-        sid/cluster_id
-        coord_addr
-        self_addr
-*/
-
-struct ClientFollowingEntry {
+struct ClientFollowerEntry {
     std::string cid;
-    std::vector<std::string> following;
+    std::vector<std::string> followers;
+    // std::vector<std::string> following;
 };
 
 class SyncService {
@@ -112,7 +69,7 @@ class SyncService {
     // All client ids across all server clusters
     std::vector<std::string> global_client_table;
     // Local clients and who they follow
-    std::vector<ClientFollowingEntry> local_client_table;
+    std::vector<ClientFollowerEntry> client_follower_table;
 
     // Forwarding containers
     std::queue<FlaggedDataEntry> entries_to_forward;      // come from .../$CID/sent_messages.data
@@ -124,16 +81,18 @@ class SyncService {
     // RPC issuers
     void RegisterWithCoordinator(const Registration& reg, int count=0);
     void UpdateGlobalClientTable();
-    void EntryForwardHandler();
+    void ForwardHandler();
+    void UpdateAllFollowerData();
+    std::vector<std::string> FetchFollowersForUser(const std::string& cid);
 
     // Helpers
-    void check_new_local_msgs();
-    void proc_entry_recvs();
-    void update_local_client_table();
-    // FlaggedDataEntry compose_stream_init_msg(); // ===(!) DEPRECATED
-    std::unordered_set<std::string> get_clients_followed();
-    ClientFollowingEntry* get_client_following_entry(std::string cid);
-    std::vector<std::string> get_clients_who_follow(std::string cid);
+    // void check_new_local_msgs(); // ---(!) DEPRECATED
+    // void proc_entry_recvs();     // ---(!) DEPRECATED
+    // void update_client_follower_table();     // ---(!) DEPRECATED
+    // FlaggedDataEntry compose_stream_init_msg(); // ---(!) DEPRECATED
+    // std::unordered_set<std::string> get_clients_followed(); // ---(!) DEPRECATED
+    ClientFollowerEntry* get_client_follower_entry(std::string cid);
+    // std::vector<std::string> get_clients_who_follow(std::string cid); // ---(!) DEPRECATED
     void Spin();
     
 public:
@@ -160,19 +119,78 @@ SyncService::SyncService(const std::string& caddr, const std::string& host, cons
 
     RegisterWithCoordinator(reg);
             
-    // Issue RPC to get global clients and write to file (X)
-    UpdateGlobalClientTable();
-    
-    // Issue SchmokieFS to get local clients into memory
-    update_local_client_table();
-
+    // * Run all our service methods
     Spin();
 }
 void SyncService::Spin() {
     while (true) {
         std::cout << "Issuing spin cycle! then sleeping for " << SLEEP_MS << '\n';//(!)
-        EntryForwardHandler();
+
+        // * Fetch all followers for each client store in client_follower_table,
+        //    then write to $CID/followers.data for each
+        UpdateAllFollowerData();
+
+        // * Update global clients
+        UpdateGlobalClientTable();
+
+        // * Establish stream w/ coordinator, read sent_messages.data and handle forwards sequentially
+        //   writing to .../$CID/timeline.data where applicable
+        ForwardHandler();
+
+        // * goodnight, sweet thread!
         std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_MS));
+    }
+}
+std::vector<std::string> SyncService::FetchFollowersForUser(const std::string& cid) {
+    // * Issue RPC to coordinator retrieving the tracked followers for cid
+    Reply repl;
+    ClientContext ctx;
+    Request req;
+    req.set_username(cid);
+    Status stat = coord_stub_->FetchFollowers(&ctx, req, &repl);
+    if (!stat.ok()) {
+        std::cout << "ERR ON FETCHFOLLOWERS for cid=" << cid << '\n';//(!)
+        return std::vector<std::string>();
+    }
+
+    // * If success, copy all followers to vector and return
+    std::vector<std::string> followers;
+    for (int i = 0; i < repl.following_users_size(); ++i) {
+        followers.push_back(repl.following_users(i));
+    }
+    return followers;
+}
+void SyncService::UpdateAllFollowerData() {
+    /*
+        Update the in-memory client_follower_table
+        Update the on-disc $CID/followers.data
+    */
+
+    // * Read all client cids from fs
+    std::vector<std::string> clients = SchmokieFS::SyncService::read_local_cids_from_fs(sid, "primary");
+
+    // * For each client in fs, fetch their followers from the coordinator
+    for (const std::string cid_: clients) {
+        // * Get their ClientFollowerEntry or create if new
+        ClientFollowerEntry* cf_entry = get_client_follower_entry(cid_);
+        if (cf_entry == nullptr) { // make new
+            ClientFollowerEntry cfe_new;
+            cfe_new.cid = cid_;
+            client_follower_table.push_back(cfe_new);
+
+            /* (!) EASY FIX (!) */
+            // cf_entry = &cfe_new; //(!) don't know if pushing to vec will change ref (!)(!)
+            // (!) wasteful but we know it will resolve correctly
+            cf_entry = get_client_follower_entry(cid_);
+        }
+        // * Update the in-memory client_follower_table
+        cf_entry->followers = FetchFollowersForUser(cid_);
+    }
+    
+    // * Update ALL followers on disc, we're aiming to do this in batches so we can
+    //   acquire and release a lock quicker than if we do it one user at a time
+    for (const ClientFollowerEntry& cli_fe: client_follower_table) {
+        SchmokieFS::SyncService::update_followers(sid, cli_fe.cid, cli_fe.followers, "primary");
     }
 }
 void SyncService::RegisterWithCoordinator(const Registration& reg, int count) {
@@ -238,275 +256,324 @@ void SyncService::UpdateGlobalClientTable() {
     SchmokieFS::SyncService::write_global_clients(sid, global_client_table, "primary");
     std::cout << "Updated global clients in memory and on cluster disc\n";//(!)
 }
-void SyncService::check_new_local_msgs() {
-    /*
-        Check for outbound client messages in .../$CID/sent_messages.tmp and read them into
-        memory. Remove this file so we don't double send. These messages are buffered
-        next time we do a forward exchange with the coordinator.
-    */
-    //(!) debuggovision
-    // |
-    // std::cout << "size entries_to_forward before:" << entries_to_forward.size() << "\n";//(!)
-    // +---(!)
+// void SyncService::check_new_local_msgs() { // ---(!) DEPRECATED?
+//     /*
+//         Check for outbound client messages in .../$CID/sent_messages.tmp and read them into
+//         memory. Remove this file so we don't double send. These messages are buffered
+//         next time we do a forward exchange with the coordinator.
+//     */
+//     //(!) debuggovision
+//     // |
+//     // std::cout << "size entries_to_forward before:" << entries_to_forward.size() << "\n";//(!)
+//     // +---(!)
     
 
-    // * Update local client table
-    update_local_client_table();
+//     // * Update local client table
+//     update_client_follower_table();
 
-    // * For each local client, check if there are new outbound message(s)
-    for (const ClientFollowingEntry& client_: local_client_table) {
-        // std::vector<FlaggedDataEntry> new_entries = SchmokieFS::SyncService::check_update_by_cid(sid,client_.cid, "primary");
-        std::vector<FlaggedDataEntry> new_entries = SchmokieFS::SyncService::check_sent_by_cid(sid, client_.cid, "primary");
-        // * Buffer each message to be forwarded later
-        for (int i = 0; i < new_entries.size(); ++i) {
-            entries_to_forward.push(new_entries[i]);
-        }
-    }
+//     // * For each local client, check if there are new outbound message(s)
+//     for (const ClientFollowerEntry& client_: client_follower_table) {
+//         // std::vector<FlaggedDataEntry> new_entries = SchmokieFS::SyncService::check_update_by_cid(sid,client_.cid, "primary");
+//         std::vector<FlaggedDataEntry> new_entries = SchmokieFS::SyncService::check_sent_by_cid(sid, client_.cid, "primary");
+//         // * Buffer each message to be forwarded later
+//         for (int i = 0; i < new_entries.size(); ++i) {
+//             entries_to_forward.push(new_entries[i]);
+//         }
+//     }
 
-    //(!) debuggovision
-    // |
-    // std::cout << "size entries_to_forward before:" << entries_to_forward.size() << "\n";//(!)
-    // std::cout << "entries:\n";
-    // while (!entries_to_forward.empty()) {
-    //     std::cout << entries_to_forward.front().entry() << '\n';
-    //     entries_to_forward.pop();
-    // }
-    // +---(!)
+//     //(!) debuggovision
+//     // |
+//     // std::cout << "size entries_to_forward before:" << entries_to_forward.size() << "\n";//(!)
+//     // std::cout << "entries:\n";
+//     // while (!entries_to_forward.empty()) {
+//     //     std::cout << entries_to_forward.front().entry() << '\n';
+//     //     entries_to_forward.pop();
+//     // }
+//     // +---(!)
 
-    std::cout << "Pulled local messages into entries_to_forward queue\n";//(!)
-}
-std::unordered_set<std::string> SyncService::get_clients_followed() {
-    // For each local client add those they follow to clients_followed,
-    // at this point in execution, the local_client_table should be up to date
+//     std::cout << "Pulled local messages into entries_to_forward queue\n";//(!)
+// }
+// std::unordered_set<std::string> SyncService::get_clients_followed() {       // ---(!) DEPRECATED?
+//     // For each local client add those they follow to clients_followed,
+//     // at this point in execution, the client_follower_table should be up to date
 
-    // * Clear the set
-    std::unordered_set<std::string> clients_followed;
+//     // * Clear the set
+//     std::unordered_set<std::string> clients_followed;
 
-    // * Iterate over all local clients
-    for (const ClientFollowingEntry& e: local_client_table) {
-        // * Iterate all clients they follow and add to set iff not already there
-        for (const std::string& f: e.following) {
-            if (clients_followed.find(f) == clients_followed.end()) {
-                clients_followed.insert(f);
-            }
-        }
-    }
-    // * return set to caller
-    return clients_followed;
-}
-void SyncService::EntryForwardHandler() {
+//     // * Iterate over all local clients
+//     for (const ClientFollowerEntry& e: client_follower_table) {
+//         // * Iterate all clients they follow and add to set iff not already there
+//         for (const std::string& f: e.following) {
+//             if (clients_followed.find(f) == clients_followed.end()) {
+//                 clients_followed.insert(f);
+//             }
+//         }
+//     }
+//     // * return set to caller
+//     return clients_followed;
+// }
+/*RE(!)
+    Outbound:
+
+    Read in .../$SID/primary/sent_messages.data
+
+    for each entry in sent_messages.data        --> Order here matters!
+        Read in entry and extract sender.cid
+        Read in followers of sender.cid
+            ForwardIn{ followers_of_user | sent_message }
+            Send forward to coordinator
+    
+    Inbound:
+
+    Read in Forward{ followers_of_user | sent_message}
+    for each followers_of_user
+        write sent_message to .../$follower_cid/timeline.data where IOflag=1
+
+    
+    -> Some of these incoming will have been local which we bounced back
+    -> Only respects SOME message order
+
+*/
+// RE(!) Just keep the stream open?
+//       Maybe just issue a thread that keeps calling this method?
+/*
+DBG:
+    We're double sending or more likely we are double reading
+    msg doesn't double until we recv it from server
+
+*/
+void SyncService::ForwardHandler() {
+
     std::cout << "Checking for bidi-forwards\n";//(!)
-    // (!) This more than anything would benefit from class-wide multithreading
-    //     for simplicity, we're just doing it function wide for now.
-    
-    // ~T1 would sniff for new message receipts and write
-    // ~T2 would sniff for new message sends and forward
 
     /*
-    Idea:
-        Check if there's new forwardable entries
-        Open stream to forward entries
-        If any entries, forward to coord (all outbound, by user)
-        Before closing stream read messages, this are forwarded by coord
-        Close stream
+        The primary downside to this implementation (which simplifies our lock service)
+        is that it doesn't scale well to many threads. Since we treat local messages the
+        same as global messages, mulithreading our stream->Read/stream->Write runs the risk
+        that some local messages will not be sent until the next cycle.
+
+        After this, without a counter (lamport clock, etc.), we cannot guarentee messages
+        across server clusters are ordered properly.
     */
-
-    // * Check for new local sent msgs in each users' .../$CID/sent_messages.data
-    check_new_local_msgs();
-
-    // * Update global clients
-    UpdateGlobalClientTable();
-
-    // * Open bidi-stream
+    // * Open stream and send stream init message
     ClientContext ctx;
-    std::shared_ptr<grpc::ClientReaderWriter<FlaggedDataEntry, FlaggedDataEntry>> stream {
+    std::shared_ptr<grpc::ClientReaderWriter<Forward, Forward>> stream {
         coord_stub_->ForwardEntryStream(&ctx)
     };
-
-    // Always start the stream with { "SYNCINIT", sid }, before dispatching reader/writer -(!) neccessary?
-
-    // * send special init message with metadata to help forward message routing
-    FlaggedDataEntry stream_init_msg;
-    stream_init_msg.set_cid("SYNCINIT");
+    Forward stream_init_msg;
+    stream_init_msg.add_cid("SYNCINIT");
     stream_init_msg.set_entry(sid);
-    // * Write init msg to stream - should always be first msg on fresh stream
     stream->Write(stream_init_msg);
+
+    // --- Handle outbound forwards ---
     
-    // * Forward local entries, if any exists (sync -> coordinator)
-    std::thread writer([&]() { //(X) 
-        // * Write all data entries to stream
-        while (!entries_to_forward.empty()) {
-            // >>>-------(!)
-            std::cout << "sending cid=" << entries_to_forward.front().cid() << '\n';//(!)
-            std::cout << entries_to_forward.front().entry() << "\n\n";//(!)
-            // <<<-------(!)
-            stream->Write(entries_to_forward.front());
-            entries_to_forward.pop();
+    // RE(!)? could thread here, but given that we gather all forwards each time we call this method
+    //        and close the stream after reading it doesn't necessarily make sense to spawn a blocking
+    //        thread
+
+    // * Read in and delete .../$SID/sent_messages.tmp if it exists
+    std::vector<FlaggedDataEntry> sent_messages = SchmokieFS::SyncService::gather_sent_msgs(sid, "primary");
+
+    //(!)-------------------------------------------------(!)
+    std::cout << "--- sent_messages.tmp ---\n";
+    for (const auto& m: sent_messages) {
+        std::cout << m.entry() << '\n';
+    }
+    std::cout << "      ---     \n";
+    //(!)-------------------------------------------------(!)
+
+    // * For each message in sent_messages
+    for (const FlaggedDataEntry& fd_entry: sent_messages) {
+        // * Extract sender
+        std::string sender_cid = fd_entry.cid();
+
+        // * Gather the followers for the sender
+        std::vector<std::string> sender_followers = get_client_follower_entry(sender_cid)->followers;
+
+        // * Composer Forward{ followers of sender | sent_message }
+        Forward outbound_fwd;
+        for(const std::string& follower_cid_: sender_followers) {
+            outbound_fwd.add_cid(follower_cid_);
         }
-        // * Signal we're done writing, and will commence reading
-        stream->WritesDone();
-    });
+        outbound_fwd.set_entry(fd_entry.entry());
 
-    // * Read forwards, if any exist (coordinator -> sync)
-    // (!) test this does not leave any orphaned msgs on stream (!)
-    std::thread reader([&]() {
-        FlaggedDataEntry new_entry;
-        while (stream->Read(&new_entry)) {
-            // >>>-------(!)
-            std::cout << "recvd cid=" << new_entry.cid() << '\n';//(!)
-            std::cout << new_entry.entry() << "\n\n";//(!)
-            // <<<-------(!)
-            entries_recvd.push(new_entry);
-        }
-    });
+        //(!)-------------------------------------------------(!)
+        std::cout << "Forwarding message: " << outbound_fwd.entry() << '\n';
+        //(!)-------------------------------------------------(!)
 
-    // * Wait for thread completion before closing the stream
-    writer.join();
-    reader.join();
-    Status stat = stream->Finish();
+        // * Send this to coordinator
+        stream->Write(outbound_fwd);
+    }
+    
+    // * Wait for writes to finish and signal to coordinator it can start forwarding msgs
+    stream->WritesDone();
 
-    if (!stat.ok()) {
-        std::cout << "SYNC STREAM ERR\n";//(!)
+    //(!)-------------------------------------------------(!)
+    std::cout << "Done with outbounds\n\n";
+    //(!)-------------------------------------------------(!)
+
+    // --- Handle inbound forwards ---
+    
+    // RE(!)? similarly could be threaded, but the coordinator either sends forwards for clients
+    //        we server, or it sends us nothing, then we close the stream. We're not really waiting
+    //        around for anything, and we don't keep this stream open.
+
+    // * For each read Forward{ receiver cid | sent_message }
+    Forward inbound_fwd;
+    while(stream->Read(&inbound_fwd)) {
+        // * Unpack forward
+        std::string recvr_cid = inbound_fwd.cid(0);
+        std::string entry = inbound_fwd.entry();
+
+        //(!)-------------------------------------------------(!)
+        std::cout << "Got inboudn for cid=" << recvr_cid << '\n';
+        std::cout << entry << "\n\n";
+        //(!)-------------------------------------------------(!)
+
+        // * Write sent_message to .../$receiver_cid/timeline.data with IOflag=1
+        SchmokieFS::SyncService::write_fwd_to_timeline(sid, recvr_cid, entry, "primary");
     }
 
-    // * Call database IO methods
-    proc_entry_recvs();
+    Status stat = stream->Finish();
+    if (!stat.ok()) {
+        std::cout << "FWDSTREAM DESTRUCTOR ERR\n";//(!)
+    }
 }
-ClientFollowingEntry* SyncService::get_client_following_entry(std::string cid) {
-    for (int i = 0; i < local_client_table.size(); ++i) {
-        if (local_client_table[i].cid == cid) {
-            return &local_client_table[i];
+ClientFollowerEntry* SyncService::get_client_follower_entry(std::string cid) {
+    for (int i = 0; i < client_follower_table.size(); ++i) {
+        if (client_follower_table[i].cid == cid) {
+            return &client_follower_table[i];
         }
     }
     return nullptr;
 }
-void SyncService::update_local_client_table() {
-    // Since ClientFollowingEntry contains a vector, this method is possibly slower
-    // or as-slow-as just clearing the table and generating from scratch
+// void SyncService::update_client_follower_table() {
+//     // Since ClientFollowerEntry contains a vector, this method is possibly slower
+//     // or as-slow-as just clearing the table and generating from scratch
 
-    // * Get all CIDs in this cluster
-    std::vector<std::string> local_clients = SchmokieFS::SyncService::read_local_cids_from_fs(sid, "primary");
+//     // * Get all CIDs in this cluster
+//     std::vector<std::string> local_clients = SchmokieFS::SyncService::read_local_cids_from_fs(sid, "primary");
 
-    // * For each CID in this cluster, read in their followers
-    for (const std::string& client_: local_clients) {
-        std::vector<std::string> following_ = SchmokieFS::SyncService::read_following_by_cid(sid, client_, "primary");
+//     // * For each CID in this cluster, read in their followers
+//     for (const std::string& client_: local_clients) {
+//         std::vector<std::string> followers_ = SchmokieFS::SyncService::read_followers_by_cid(sid, client_, "primary");
 
-        // * Check if client following entry in table - if not, add to table
-        ClientFollowingEntry* cfentry = get_client_following_entry(client_);
-        if (cfentry != nullptr) { // exists
-            cfentry->following = following_;
-        } else { // DNE, add to local_client_table
-            ClientFollowingEntry cfentry_new;
-            cfentry_new.cid = client_;
-            cfentry_new.following = following_;
-            local_client_table.push_back(cfentry_new);
-        }
-    }
+//         // * Check if client following entry in table - if not, add to table
+//         ClientFollowerEntry* cfentry = get_client_follower_entry(client_);
+//         if (cfentry != nullptr) { // exists
+//             cfentry->followers = followers_;        //(!) faster better way to copy vector?
+//         } else { // DNE, add to client_follower_table
+//             ClientFollowerEntry cfentry_new;
+//             cfentry_new.cid = client_;
+//             cfentry_new.followers = followers_;
+//             client_follower_table.push_back(cfentry_new);
+//         }
+//     }
 
-    //(!) debug view
-    // |
-    // std::cout << "local clients, should be:\n";//(!)
-    // std::cout << "1->111 112\n2->221 222\n3->331 332\n---\n";//(!)
-    // for (const auto& c: local_client_table) {
-    //     std::cout << c.cid << "->";
-    //     for (const auto& f : c.following) {
-    //         std::cout << f << ' ';
-    //     }
-    //     std::cout << '\n';
-    // }
-    // std::cout << '\n';
-    // +---(!)
+//     //(!) debug view
+//     // |
+//     // std::cout << "local clients, should be:\n";//(!)
+//     // std::cout << "1->111 112\n2->221 222\n3->331 332\n---\n";//(!)
+//     // for (const auto& c: client_follower_table) {
+//     //     std::cout << c.cid << "->";
+//     //     for (const auto& f : c.following) {
+//     //         std::cout << f << ' ';
+//     //     }
+//     //     std::cout << '\n';
+//     // }
+//     // std::cout << '\n';
+//     // +---(!)
 
-    std::cout << "Update local client table in memory from cluster disc\n";
-}
-std::vector<std::string> SyncService::get_clients_who_follow(std::string cid) {
-    // Return all local clients who have cid in there following vector on the local_client_table
-    std::vector<std::string> followers_of;
-    // * Iterate over clients in local_client_table
-    for (const ClientFollowingEntry& cfentry: local_client_table) {
-        // * Check if the given cid exists in this client's following vector
-        for (const std::string& usr_: cfentry.following) {
-            // * If so, add this client to followers_of
-            if (cid == usr_) {
-                followers_of.push_back(cfentry.cid);
-                break;
-            }
-        }
-    }
-    return followers_of;
-}
-void SyncService::proc_entry_recvs() { // Database IO method
+//     std::cout << "Update local client table in memory from cluster disc\n";
+// }
+// std::vector<std::string> SyncService::get_clients_who_follow(std::string cid) { // ---(!) DEPRECATED?
+//     // Return all local clients who have cid in there following vector on the client_follower_table
+//     std::vector<std::string> followers_of;
+//     // * Iterate over clients in client_follower_table
+//     for (const ClientFollowerEntry& cfentry: client_follower_table) {
+//         // * Check if the given cid exists in this client's following vector
+//         for (const std::string& usr_: cfentry.following) {
+//             // * If so, add this client to followers_of
+//             if (cid == usr_) {
+//                 followers_of.push_back(cfentry.cid);
+//                 break;
+//             }
+//         }
+//     }
+//     return followers_of;
+// }
+// void SyncService::proc_entry_recvs() { // Database IO method // ---(!) DEPRECATED
 
-    //(!) debugg-o-vision   (!)     (!)     (!)
-    // |
-    // // manual entries_recvd filling so we can test this function
-    // FlaggedDataEntry e11;
-    // e11.set_cid("111");
-    // e11.set_entry("0|:|2022-04-16T20:28:03Z|:|111|:|hello, user1!, how's it going?");
-    // FlaggedDataEntry e12;
-    // e12.set_cid("112");
-    // e12.set_entry("0|:|2022-04-16T20:28:03Z|:|112|:|hello, user1 from 112!");
-    // FlaggedDataEntry e21;
-    // e21.set_cid("222");
-    // e21.set_entry("0|:|2022-04-16T20:28:07Z|:|222|:|user 2, I'm 222");
-    // FlaggedDataEntry e22;
-    // e22.set_cid("221");
-    // e22.set_entry("0|:|2022-04-16T20:28:07Z|:|221|:|Hi user 2, I've been trying to get a hold of you about your car's extended warranty!");
-    // entries_recvd.push(e11);
-    // entries_recvd.push(e12);
-    // entries_recvd.push(e21);
-    // entries_recvd.push(e22);
-    // +---(!)    (!)     (!)     (!)     (!)
+//     //(!) debugg-o-vision   (!)     (!)     (!)
+//     // |
+//     // // manual entries_recvd filling so we can test this function
+//     // FlaggedDataEntry e11;
+//     // e11.set_cid("111");
+//     // e11.set_entry("0|:|2022-04-16T20:28:03Z|:|111|:|hello, user1!, how's it going?");
+//     // FlaggedDataEntry e12;
+//     // e12.set_cid("112");
+//     // e12.set_entry("0|:|2022-04-16T20:28:03Z|:|112|:|hello, user1 from 112!");
+//     // FlaggedDataEntry e21;
+//     // e21.set_cid("222");
+//     // e21.set_entry("0|:|2022-04-16T20:28:07Z|:|222|:|user 2, I'm 222");
+//     // FlaggedDataEntry e22;
+//     // e22.set_cid("221");
+//     // e22.set_entry("0|:|2022-04-16T20:28:07Z|:|221|:|Hi user 2, I've been trying to get a hold of you about your car's extended warranty!");
+//     // entries_recvd.push(e11);
+//     // entries_recvd.push(e12);
+//     // entries_recvd.push(e21);
+//     // entries_recvd.push(e22);
+//     // +---(!)    (!)     (!)     (!)     (!)
 
-    // At this point, we've sent all our forwards to coordinator, and we may have
-    // received forwards that need to be processed
+//     // At this point, we've sent all our forwards to coordinator, and we may have
+//     // received forwards that need to be processed
 
-    // * Write any forwards received to the the relevant users' timeline
-    while (!entries_recvd.empty()) {
-        // (!) we could save our pop for the end if there's some IO error
-        FlaggedDataEntry ufdentry = entries_recvd.front();
-        entries_recvd.pop();
+//     // * Write any forwards received to the the relevant users' timeline
+//     while (!entries_recvd.empty()) {
+//         // (!) we could save our pop for the end if there's some IO error
+//         FlaggedDataEntry ufdentry = entries_recvd.front();
+//         entries_recvd.pop();
 
-        std::string sender = ufdentry.cid();
-        std::vector<std::string> clients_who_follow_sender = get_clients_who_follow(sender);
+//         std::string sender = ufdentry.cid();
+//         std::vector<std::string> clients_who_follow_sender = get_clients_who_follow(sender);
         
 
-        // * If the coordinator forwarded us a msg for which we don't have a receiver, there must
-        //   have been a client to register w/ coordinator since the last time we updates local_clients_table
-        //   do that now, and if still none - just throw msg away (for now)
-        if (clients_who_follow_sender.size() == 0) {
-            std::cout << "No local clients found who follow " << sender << " updating local clients...\n";//(!)
-            update_local_client_table();
-            clients_who_follow_sender = get_clients_who_follow(sender);
+//         // * If the coordinator forwarded us a msg for which we don't have a receiver, there must
+//         //   have been a client to register w/ coordinator since the last time we updates local_clients_table
+//         //   do that now, and if still none - just throw msg away (for now)
+//         if (clients_who_follow_sender.size() == 0) {
+//             std::cout << "No local clients found who follow " << sender << " updating local clients...\n";//(!)
+//             // update_client_follower_table(); //(!) do this before forwards, not after!
+//             clients_who_follow_sender = get_clients_who_follow(sender);
 
-            if (clients_who_follow_sender.size() == 0) {//(!)
-                // If still none, there's probably a bug, just throw msg away for now (!)
-                std::cout << "Still no clients who follow " << sender << " something must be wrong...\n";//(!)
-                continue;
-            }
-        }
+//             if (clients_who_follow_sender.size() == 0) {//(!)
+//                 // If still none, there's probably a bug, just throw msg away for now (!)
+//                 std::cout << "Still no clients who follow " << sender << " something must be wrong...\n";//(!)
+//                 continue;
+//             }
+//         }
 
-        //(!) debugg-o-vision   (!)     (!)     (!)
-        // |
-        // std::cout << "sender=" << sender << "\nlocal clients who follow:\n";
-        // for (const auto& s: clients_who_follow_sender) {
-        //     std::cout << s << '\n';
-        // }
-        // +---(!)
+//         //(!) debugg-o-vision   (!)     (!)     (!)
+//         // |
+//         // std::cout << "sender=" << sender << "\nlocal clients who follow:\n";
+//         // for (const auto& s: clients_who_follow_sender) {
+//         //     std::cout << s << '\n';
+//         // }
+//         // +---(!)
     
 
-        // * For each client who follows this sender, write to their .../$CID/timeline.data
-        for (const std::string& client_: clients_who_follow_sender) {
-            //(!) debugg-o-vision   (!)     (!)     (!)
-            // |
-            // std::cout << "writing to timeline for cid=" << client_ << "\nentry=" << ufdentry.entry() << '\n';
-            // +---(!)
-            SchmokieFS::SyncService::write_fwd_to_timeline(sid, client_, ufdentry.entry(), "primary");
-            std::cout << "Wrote message receipts to timeline with server_flag=1\n"; //(!)
-        }
-    }
-    std::cout << "End proc_entry_recvs\n";//(!)
-}
+//         // * For each client who follows this sender, write to their .../$CID/timeline.data
+//         for (const std::string& client_: clients_who_follow_sender) {
+//             //(!) debugg-o-vision   (!)     (!)     (!)
+//             // |
+//             // std::cout << "writing to timeline for cid=" << client_ << "\nentry=" << ufdentry.entry() << '\n';
+//             // +---(!)
+//             SchmokieFS::SyncService::write_fwd_to_timeline(sid, client_, ufdentry.entry(), "primary");
+//             std::cout << "Wrote message receipts to timeline with server_flag=1\n"; //(!)
+//         }
+//     }
+//     std::cout << "End proc_entry_recvs\n";//(!)
+// }
 
 int main(int argc, char** argv) {
 
@@ -558,7 +625,7 @@ int main(int argc, char** argv) {
 //         have the coordinator write all of these forwards on receipt
 //         have the coordinator send hardcoded forwards
 //     */
-//     // synchro.test("Testing EntryForwardHandler\n");
+//     // synchro.test("Testing ForwardHandler\n");
 //     // std::cout << "-(T)-\nexiting.\n";
 //     // exit(0);
 //     //    -------(T)

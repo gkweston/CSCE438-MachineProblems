@@ -65,34 +65,18 @@ std::vector<std::string> split_string(std::string s, std::string delim=",") {
     parts.push_back(s);
     return parts;
 }
-// std::unordered_set<std::string> parse_stream_init_msg(std::string init_entry, std::string& sid) { // --(!) DEPRECATED?
-//     // Set the cluster_id/sid for this SyncService, return a set of all clients
-//     // which are being followed on this cluster for outbound msg forwards
-
-// 	// * Parse message on delim=','
-// 	std::vector<std::string> parts = split_string(init_entry, ",");
-
-// 	// * Extract the SID and set sid by reference
-// 	sid = parts[0];
-
-// 	// * return the unordered set of followees for this cluster
-// 	std::unordered_set<std::string> followees;
-// 	for (int i = 1; i < parts.size(); ++i) {
-// 		followees.insert(parts[i]);
-// 	}
-// 	return followees;
-// }
 
 // (!) add an entry for clients served when we know we can keep a vector of elements
 struct ServerEntry {
     std::string sid; //cluster ID
     std::string hostname;
 
+    
+    std::vector<std::string> clients_served;
     // Using unordered set for faster lookups of forwarding
-    // std::vector<std::string> clients_served;
-    std::unordered_set<std::string> clients_served;
+    // std::unordered_set<std::string> clients_served; //---(!) DEPRECATED
     // These are entries which contain a user followed by someone in this cluster
-    std::queue<FlaggedDataEntry> forward_queue;
+    std::queue<FlaggedDataEntry> forward_queue; // ---(!) DEPRECATED?
 
     std::string primary_port;
     std::string secondary_port;
@@ -125,14 +109,14 @@ struct ServerEntry {
     bool operator==(const ServerEntry& e1) const {
         return sid == e1.sid;
     }
-    bool is_serving_user_from_vec(const std::vector<std::string>& v) const {
-        for (const std::string& s: v) {
-            if (clients_served.find(s) != clients_served.end()) {
-                return true;
-            }
-        }
-        return false;
-    }
+    // bool is_serving_user_from_vec(const std::vector<std::string>& v) const { // ---(!) DEPRECATED
+    //     for (const std::string& s: v) {
+    //         if (clients_served.find(s) != clients_served.end()) {
+    //             return true;
+    //         }
+    //     }
+    //     return false;
+    // }
     // bool is_serving(const std::string& user) {
     //     return (std::find(clients_served.begin(), clients_served.end(), user) != clients_served.end());
     // }
@@ -147,12 +131,15 @@ struct ServerEntry {
 struct ClientEntry {
     std::string cid;        // client ID
     std::string sid;        // assigned clusterID
-    std::vector<std::string> followers;
+    std::vector<std::string> followers; // ---(!) deprecated?
+    std::queue<std::string> forwards;
 
-    ClientEntry(std::string client, std::string server) : cid(client), sid(server) { }
-    // bool is_followed_by(std::string user) {
-    //     return (std::find(followers.begin(), followers.end(), user) != followers.end());
-    // }
+    ClientEntry(std::string client_id, std::string server_id) : cid(client_id), sid(server_id) { 
+        followers.push_back(cid);
+    }
+    bool has_forwards() {
+        return !forwards.empty();
+    }
 };
 
 // Forward routing table --- may be refactored later
