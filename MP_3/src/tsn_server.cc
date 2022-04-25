@@ -1,69 +1,23 @@
-/*
-Diffs required:
-	Step 1.
-	* Add coordinator stub
-	* Send hostname, port info to coordinator on init
-
-	Step 2.
-	* Assign enum for PRIMARY, SECONDARY at execution
-	* Establish connection w/ coordinator, send HRTBT on this channel
-	* Create ./datastore/TYPE_ID/[context.data, user_timelines.data]
-	* Change IO to write properly to files
-	* Establish connection w/ coordinator, send LOCK_ACQUIRE, LOCK_RELEASE on this channel
-
-	STEP FINAL.
-	* Gank their file IO, then just USE YOUR MP_2 for the rest (it's not worse!)
-*/
-
-/*
- *
- * Copyright 2015, Google Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
-
+/* ------- server ------- */
 #include <ctime>
-
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
-
+#include <google/protobuf/util/time_util.h>
+#include <grpc++/grpc++.h>
 #include <fstream>
+#include <vector>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <stdlib.h>
 #include <unistd.h>
-#include <google/protobuf/util/time_util.h>
-#include <grpc++/grpc++.h>
+#include <mutex>
+#include <thread>
 
+#include "tsn_server.h"
+#include "schmokieFS.h"
+#include "tsn_coordinator.h"
 #include "sns.grpc.pb.h"
-#include "coordinator.h"
 
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;
@@ -75,222 +29,182 @@ using grpc::ServerReaderWriter;
 using grpc::ServerWriter;
 using grpc::Status;
 using grpc::ClientContext;
+
 using csce438::Message;
-using csce438::ListReply;
 using csce438::Request;
 using csce438::Reply;
 using csce438::SNSService;
 using csce438::Registration;
+using csce438::GlobalUsers;
+using csce438::Beat;
 using csce438::SNSCoordinatorService;
 
-#define DEFAULT_HOST (std::string("0.0.0.0"))
-#define SUCCESS 					("SUCCESS")
-#define FAILURE_ALREADY_EXISTS 		("FAILURE_ALREADY_EXISTS")
-#define FAILURE_NOT_EXISTS 			("FAILURE_NOT_EXISTS")
-#define FAILURE_INVALID_USERNAME 	("FAILURE_INVALID_USERNAME")
-#define FAILURE_INVALID 			("FAILURE_INVALID")
-#define FAILURE_UNKNOWN 			("FAILURE_UNKNOWN")
-
-struct Client {
-	std::string username;
-	bool connected = true;
-	int following_file_size = 0;
-	std::vector<Client*> client_followers;
-	std::vector<Client*> client_following;
-	ServerReaderWriter<Message, Message>* stream = 0;
-	bool operator==(const Client& c1) const{
-		return (username == c1.username);
-	}
-};
-
-//Vector that stores every client that has been created
-std::vector<Client> client_db;
-
-//Helper function used to find a Client object given its username
-int find_user(std::string username){
-	int index = 0;
-	for(Client c : client_db){
-		if(c.username == username)
-			return index;
-		index++;
-	}
-	return -1;
-}
+#define DEFAULT_HOST 				(std::string("0.0.0.0"))
+#define FILE_DELIM   				(std::string("|:|"))
+#define HRTBT_FREQ                  (7000)
+#define DEBUG                       (0)
 
 class SNSServiceImpl final : public SNSService::Service {
-  
-	Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
-		Client user = client_db[find_user(request->username())];
-		int index = 0;
-		for(Client c : client_db){
-			list_reply->add_all_users(c.username);
-		}
-		std::vector<Client*>::const_iterator it;
-		for(it = user.client_followers.begin(); it!=user.client_followers.end(); it++){
-			list_reply->add_followers((*it)->username);
-		}
-		return Status::OK;
-	}
 
-	Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
-		std::string username1 = request->username();
-		std::string username2 = request->arguments(0);
-		int join_index = find_user(username2);
-		if(join_index < 0 || username1 == username2)
-			reply->set_msg(FAILURE_INVALID_USERNAME);
-		else{
-			Client *user1 = &client_db[find_user(username1)];
-			Client *user2 = &client_db[join_index];
-			if(std::find(user1->client_following.begin(), user1->client_following.end(), user2) != user1->client_following.end()){
-				reply->set_msg(FAILURE_ALREADY_EXISTS);//(!)"Join Failed -- Already Following User"
-				return Status::OK;
-			}
-			user1->client_following.push_back(user2);
-			user2->client_followers.push_back(user1);
-			reply->set_msg(SUCCESS);
-		}
-		return Status::OK; 
-	}
+    Status List(ServerContext* context, const Request* request, Reply* reply) override {
+        // Instead of issuing, try reading from mem like we're aiming to do...
 
-	Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
-		std::string username1 = request->username();
-		std::string username2 = request->arguments(0);
-		int leave_index = find_user(username2);
-		if(leave_index < 0 || username1 == username2)
-			reply->set_msg(FAILURE_INVALID_USERNAME);
-		else{
-			Client *user1 = &client_db[find_user(username1)];
-			Client *user2 = &client_db[leave_index];
-			if(std::find(user1->client_following.begin(), user1->client_following.end(), user2) == user1->client_following.end()){
-				reply->set_msg(FAILURE_NOT_EXISTS);//(!)"Leave Failed -- Not Following User"
-				return Status::OK;
-			}
-			user1->client_following.erase(find(user1->client_following.begin(), user1->client_following.end(), user2)); 
-			user2->client_followers.erase(find(user2->client_followers.begin(), user2->client_followers.end(), user1));
-			reply->set_msg(SUCCESS);
-		}
-		return Status::OK;
-	}
-  
-	Status Login(ServerContext* context, const Request* request, Reply* reply) override {
-		Client c;
-		std::string username = request->username();
-		int user_index = find_user(username);
-		if(user_index < 0){
-			c.username = username;
-			client_db.push_back(c);
-			reply->set_msg(SUCCESS);
-		}
-		else{ 
-			Client *user = &client_db[user_index];
-			if(user->connected)
-				reply->set_msg(FAILURE_INVALID_USERNAME);
-			else{
-				std::string msg = "Welcome Back " + user->username;
-				reply->set_msg(msg);
-				user->connected = true;
-			}
-		}
-		return Status::OK;
-	}
+        // * Read all from .../$SID/primary/global_clients.data
+        std::vector<std::string> glob_clients = schmokieFS::PrimaryServer::read_global_clients(cluster_sid);
+        for (const std::string& cid_: glob_clients) {
+            reply->add_all_users(cid_);
+        }
 
-	Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
-		Message message;
-		Client *c;
-		while(stream->Read(&message)) {
-			std::string username = message.username();
-			int user_index = find_user(username);
-			c = &client_db[user_index];
+        // * Read all from .../$CID/followers.data
+        // Technically calls a SyncService method here. We would add its own in the real world
+        std::vector<std::string> followers = schmokieFS::SyncService::read_followers_by_cid(cluster_sid, request->username(), "primary"); 
+        for (const std::string& cid_: followers) {
+            reply->add_following_users(cid_);
+        }
 
-			//Write the current message to "username.txt"
-			std::string filename = username+".txt";
-			std::ofstream user_file(filename,std::ios::app|std::ios::out|std::ios::in);
-			google::protobuf::Timestamp temptime = message.timestamp();
-			std::string time = google::protobuf::util::TimeUtil::ToString(temptime);
-			// ------->>> DIFF
-			// std::string fileinput = time+" :: "+message.username()+":"+message.msg()+"\n";
-			// We don't want our delim to shadow what a user may input
-			// Could use something like...
-			// std::string fileinput = time+"\x24"+message.username()+"\x24"+message.msg()+"\n";
-			// But for now, we'll just do
-			std::string fileinput = time+"|:|"+message.username()+"|:|"+message.msg()+"\n";
-			// <<<-------
+        reply->set_msg("SUCCESS");
 
-			//"Set Stream" is the default message from the client to initialize the stream
-			if(message.msg() != "Set Stream")
-				user_file << fileinput;
-			//If message = "Set Stream", print the first 20 chats from the people you follow
-			else{
-				if(c->stream==0)
-					c->stream = stream;
-				std::string line;
-				std::vector<std::string> newest_twenty;
-				std::ifstream in(username+"following.txt");
-				int count = 0;
-				//Read the last up-to-20 lines (newest 20 messages) from userfollowing.txt
-				while(getline(in, line)){
-					if(c->following_file_size > 20){
-						if(count < c->following_file_size-20){
-							count++;
-							continue;
-						}
-					}
-					newest_twenty.push_back(line);
-				}
-				Message new_msg; 
-				//Send the newest messages to the client to be displayed
-				for(int i = 0; i<newest_twenty.size(); i++){
-					new_msg.set_msg(newest_twenty[i]);
-					stream->Write(new_msg);
-				}    
-				continue;
-			}
-			//Send the message to each follower's stream
-			std::vector<Client*>::const_iterator it;
-			for(it = c->client_followers.begin(); it!=c->client_followers.end(); it++){
-				Client *temp_client = *it;
-				if(temp_client->stream!=0 && temp_client->connected)
-					temp_client->stream->Write(message);
-				//For each of the current user's followers, put the message in their following.txt file
-				std::string temp_username = temp_client->username;
-				std::string temp_file = temp_username + "following.txt";
-				std::ofstream following_file(temp_file,std::ios::app|std::ios::out|std::ios::in);
-				following_file << fileinput;
-				temp_client->following_file_size++;
-				std::ofstream user_file(temp_username + ".txt",std::ios::app|std::ios::out|std::ios::in);
-				user_file << fileinput;
-			}
-		}
-		//If the client disconnected from Chat Mode, set connected to false
-		c->connected = false;
-		return Status::OK;
-	}
+        return Status::OK;
+    }
+    Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
+        /*
+            Propogate coordinator response to client
 
-private:
-	std::string coordinator_addr;
-	std::string cluster_sid;
-	std::string port;
-	ServerType type_at_init;
+            HACKY: Without our sync service being called at higher frequency, we have to
+            go to the coordinator for up to date info.
 
-	std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_;
+            Send FollowUpdate(user, user_to_follow) to Coordinator
+            Coordinator does ClientEntry[user_to_follow].followers += user
+            When SyncService checks in the next time it
+                UpdatesAllFollowers in memory
+                Writes these to all .../$CID/followers.data
+        */
 
+        // * Get follower and followee names
+        std::string follower = request->username();
+        std::string followee = request->arguments(0);
+
+        // * Make sure we don't try to follow self -- which is already done by default
+        if (follower == followee) {
+            reply->set_msg("FAILURE_ALREADY_EXISTS");
+            return Status::OK;
+        }
+
+        // * Issue RPC::FollowUpdate(follower, followee) --- the coordinator will tell us if
+        //   a. followee exists
+        //   b. followee is not already being followed by follower
+        Request req;
+        req.set_username(follower);
+        req.add_arguments(followee);
+
+        Reply repl;
+        ClientContext ctx;
+        Status stat = coord_stub_->FollowUpdate(&ctx, req, &repl);
+
+        // * Translate pseudo-HTTP error codes to SNS codes
+        if (repl.msg() == "200") {
+            reply->set_msg("SUCCESS");
+        } else if (repl.msg() == "404") {
+            reply->set_msg("FAILURE_NOT_EXISTS");
+        } else {
+            reply->set_msg("FAILURE_UNKNOWN");
+        }
+
+        // * Return status of FollowUpdate
+        return stat;
+    }
+    Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
+
+        std::cout << "\nGot unimplemented UnFollow RPC\n\n";
+        return Status::OK;
+
+    }
+    Status Login(ServerContext* context, const Request* request, Reply* reply) override {
+        std::string cid_ = request->username();
+        bool isFirst = request->arguments(0) == "first";
+
+        // * Init user entry if it DNE
+        User* uptr = get_user_entry(cid_);
+        if (uptr == nullptr) {
+            // * New user we haven't encountered yet
+            User uentry(request->username());
+            users.push_back(uentry);
+        }
+
+        if (isFirst) {
+            // * If this is their first login to us, we want to set their timeline
+            //   to unread. This allows old users to join and see previous chats.
+            schmokieFS::PrimaryServer::set_timeline_unread(cluster_sid, cid_);
+        }
+
+        // * Still init client filesystem in case they didn't have a timeline
+        schmokieFS::PrimaryServer::init_client_fs(cluster_sid, cid_);
+        
+        // * Set status message
+        reply->set_msg("SUCCESS");
+
+        return Status::OK;
+    }
+    Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
+        /* A single use stream which takes a new client message and sends their forwards */
+        
+        /* ------- Inbound messages Client->Server->sent_messages.data ------- */
+        Message init_msg;
+        std::string client_cid;
+        stream->Read(&init_msg);
+        client_cid = init_msg.username();
+
+        Message inbound_msg;
+        stream->Read(&inbound_msg);
+        // * Write inbound_msg to .../$SID/primary/sent_messages.data so SyncService can propogate it
+        schmokieFS::PrimaryServer::write_to_sent_msgs(cluster_sid, inbound_msg);
+
+        
+        /* ------- Outbound messages timeline.data->Server->Client ------- */
+        std::vector<Message> new_msgs = schmokieFS::PrimaryServer::read_new_timeline_msgs(cluster_sid, client_cid);
+        for (const auto& msg_: new_msgs) {
+            if(DEBUG) std::cout << "writing to client: " << msg_.msg() << "\n";
+            stream->Write(msg_);
+        }
+        return Status::OK;
+    }
+
+    std::string coordinator_addr;
+    std::string cluster_sid;
+    std::string port;
+    std::vector<User> users;
+    // The assigned type this server was spun up as
+    ServerType type_at_init;
+
+    // Guards against unlikely race condition at is_active with
+    // this main() thread and SendHeartbeat() thread
+    std::mutex active_mtx;
+    // could be a std::atomic<bool>
+    bool is_active;
+    
+    std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_;
 	void RegisterWithCoordinator();
-public:
-	// Save sid, hostname, port and initialize coordinator RPC, then call the coordinator register function
-	SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t);
-};
+    User* get_user_entry(const std::string& uname);
 
+public:
+    void SendHeartbeat();
+    void wait_until_primary();
+    SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t);
+};
 SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t) {
 	// Server descriptors
 	coordinator_addr = coord_addr;
 	port = p;
 	cluster_sid = sid;
 
-	// This may change as server(s) fault, but we'll track what this server was
-	// spun up as [PRIMARY|SECONDARY]
 	type_at_init = t;
+    if (type_at_init == ServerType::PRIMARY) {
+        is_active = true;
+    } else {
+        is_active = false;
+    }
 	
-	// Generate coordinator stub here so we can reuse
+	// * Generate coordinator stub here so we can reuse
 	coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
 		SNSCoordinatorService::NewStub(
 			grpc::CreateChannel(
@@ -299,42 +213,100 @@ SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::strin
 		)
 	);
 
-	// Send registration message
+	// * Send registration message
 	RegisterWithCoordinator();
 }
 void SNSServiceImpl::RegisterWithCoordinator() {
 	/* Register server w/ coordinator, add me to the routing table(s)! */
 
-	// Fill RPC metadata and reg msg
+	// * Fill RPC metadata and reg msg
 	Registration reg;
 	reg.set_sid(cluster_sid);
 	reg.set_hostname(DEFAULT_HOST);
 	reg.set_port(port);
 	
 	std::string server_type_str = type_to_string(type_at_init);
-	std::cout << "Registering as type=" << server_type_str << '\n';//(!)
+	if(DEBUG) std::cout << "Registering as type=" << server_type_str << '\n';
 	reg.set_type(server_type_str);
 
 	Reply repl;
 	ClientContext ctx;
 
-	// Dispatch registration RPC
+	// * Dispatch registration RPC
 	Status stat = coord_stub_->RegisterServer(&ctx, reg, &repl);
-	if (!stat.ok())
-		std::cerr << "Server registration error for:\nsid=" << cluster_sid << "\ntype=" << type_at_init << "\n";
-	else
-		std::cout << repl.msg() << std::endl;//(!)
-	
+	if (!stat.ok()) {
+		std::cerr << "Fatal registration error for:\nsid=" << cluster_sid << ", type=" << type_at_init << "\n";
+	}
+
+	// * Init schmokieFS server file system
+	schmokieFS::PrimaryServer::init_server_fs(cluster_sid);
+}
+void SNSServiceImpl::SendHeartbeat() {
+    if(DEBUG) std::cout << "Sending heartbeat\n";
+
+    Beat send;
+    send.set_sid(cluster_sid);
+    
+    if (type_at_init == ServerType::PRIMARY) {
+        send.set_server_type("primary");
+    } else {
+        send.set_server_type("secondary");
+    }
+    Beat recv;
+    ClientContext ctx;
+    Status stat = coord_stub_->Heartbeat(&ctx, send, &recv);
+
+    ServerType type_recv = ServerType::PRIMARY;
+    if (recv.server_type() != "primary") {
+        type_recv = ServerType::SECONDARY;
+    }
+
+    // * If server is secondary and type_recv is secondary, that means this server should
+    //   now be active
+    if (type_recv == type_at_init) {
+        // * This server is now the active one on the cluster
+        active_mtx.lock();
+        is_active = true;
+        active_mtx.unlock();
+    } else {
+        // * This server is now innactive on the cluster
+        active_mtx.lock();
+        is_active = false;
+        active_mtx.unlock();
+    }
+
+
+    if(DEBUG) {
+        std::cout << "End heartbeat, server is ";
+        if (is_active) {
+            std::cout << "active\n";
+        } else {
+            std::cout << "inactive\n";
+        }
+    }
+}
+void SNSServiceImpl::wait_until_primary() {
+    
+    while(!is_active) {
+        if(DEBUG) std::cout << "Backing up primary files\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(HRTBT_FREQ));
+    }
+
+}
+User* SNSServiceImpl::get_user_entry(const std::string& uname) {
+    for (int i = 0; i < users.size(); i++) {
+        if (users[i].username == uname) {
+            return &users[i];
+        }
+    }
+    return nullptr;
 }
 
 void RunServer(std::string coord_addr, std::string sid, std::string port_no, ServerType type) {
 	// Spin up server instance
-	std::string server_address = DEFAULT_HOST + ":" + port_no;
-	// ------->>>
-	// SNSServiceImpl service;
-	// OR
+	std::string server_address = DEFAULT_HOST + ":" + port_no; 
 	SNSServiceImpl service(coord_addr, port_no, sid, type);
-	// <<<-------
+	
 
 	ServerBuilder builder;
 	builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
@@ -342,21 +314,34 @@ void RunServer(std::string coord_addr, std::string sid, std::string port_no, Ser
 	std::unique_ptr<Server> server(builder.BuildAndStart());
 	std::cout << "Server listening on " << server_address << std::endl;
 
+    std::thread heartbeat([&]() {
+        // * Dispatch a thread to send heartbeat every HRTBT_FREQ ms
+        while(true) {
+            service.SendHeartbeat();
+            std::this_thread::sleep_for(std::chrono::milliseconds(HRTBT_FREQ));
+        }
+    });
+    service.wait_until_primary();
+
 	server->Wait();
+
+    heartbeat.join();
+}
+bool is_numeric(const std::string& s) {
+    return !s.empty() &&
+        std::find_if(   s.begin(),
+                        s.end(),
+                        [](unsigned char c) { return !std::isdigit(c); }) == s.end();
 }
 
 int main(int argc, char** argv) {
 
-	/*
-	Simplified args:
-		-c <coordinatorIP>:<coordinatorPort>
-		-p <port>
-		-i <serverID>		should be a string of integers
-		-t <type>			[master|primary] or anything else to assign as secondary
-	*/
-	if (argc == 1) { //(!)
-		std::cout << "Calling convention for server:\n\n";
-		std::cout << "./tsn_server -c <coordIP>:<coordPort> -p <serverPort> -i <serverID> -t <serverType>\n\n";
+    std::string helper =
+        "Calling convention for server:\n\n"
+		"./tsn_server -c <coordIP>:<coordPort> -p <serverPort> -i <serverID> -t <primary|secondary>\n\n";
+
+	if (argc == 1) {
+		std::cout << helper;
 		return 0;
 	}
   
@@ -382,13 +367,15 @@ int main(int argc, char** argv) {
 				break;
 			default:
 				std::cerr << "Invalid Command Line Argument\n";
+                std::cerr << helper;
+                return 0;
 		}
 	}
 
-	if (type == ServerType::INVALID) {
-		std::cout << "Server type error\n";//(!)
-		return 1;
-	}
+    if (!is_numeric(serverID)) {
+        std::cout << "SID must be a numeric value, exiting\n";
+        return 0;
+    }
 	
 	RunServer(coord, serverID, port, type);
 	return 0;
