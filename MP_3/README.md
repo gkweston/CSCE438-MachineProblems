@@ -1,8 +1,8 @@
 # CSCE438 MP3 — Distributed & Fault Tolerant Networking Service
 ## Description
-A distributed network which is designed to keep a custom filesystem depending on the connected clients. As long as a secondary server is spun up, the network can withstand network partitions without any loss of availability. The network is also highly consistent, at the cost of availability, which means that messages forwarded across clusters are not automatically fetched. Instead a given client must prompt updates to it's device.
+A distributed network which is designed to keep a custom filesystem depending on the connected clients. As long as a secondary server is spun up, the network can withstand network partitions without any loss of availability. This availabillity and partition tolerance comes at the cost of consistency. For example, messages originating from the same cluster are guarenteed to be properly ordered, however messages originating from multiple clusters are not.
 
-However, SyncServices work in the background to propogate data, which is only limited to the frequency the Sync Service is called.
+SyncServices also work in the background to propogate data, which is only limited to the frequency the Sync Service is called.
 
 e.g., increasing SyncService frequency to something like 500ms gives the appearance that users are all on the same cluster. A frequency faster than this makes network propogation appear instantaneous!
 
