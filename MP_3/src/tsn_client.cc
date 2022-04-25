@@ -1,17 +1,12 @@
-/*(!)
-    - Always render 20 messages, even if blank
-(!)     */
-
-
-
 /* ------- client ------- */
 #include <iostream>
 #include <string>
-#include <unistd.h>
 #include <ctime>
 #include <vector>
 #include <thread>
 #include <chrono>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 #include <grpc++/grpc++.h>
 #include <google/protobuf/timestamp.pb.h>
@@ -37,6 +32,10 @@ using google::protobuf::util::TimeUtil;
 using google::protobuf::Timestamp;
 
 #define DEADLINE_MS     (1000)
+#define DEBUG           (0)
+
+// Forward
+void term_width_break();
 
 class Client : public IClient {
 public:
@@ -76,7 +75,6 @@ private:
     IStatus parse_comm_status(std::string s);
     std::vector<std::string> parse_input_str(std::string in, std::string delim=" ");
     void SingleMsgTimelineStream(const std::string& user_in);
-    void SingleMsgTimelineStream_(); //(!)
     void pretty_print_messages();
 
     // For last 20 messages, this is hacky but whatever
@@ -111,7 +109,6 @@ IReply Client::Login(bool isFirst=false) {
 
     // * If this is the user's first login, the server will send the last 20 
     //   messages of their timeline (reconnection case)
-
     Request request;
     request.set_username(username);
 
@@ -128,7 +125,7 @@ IReply Client::Login(bool isFirst=false) {
     active_stub_ = std::unique_ptr<SNSService::Stub>(
         SNSService::NewStub(
             grpc::CreateChannel(
-                active_hostname + ":" + active_port, grpc::InsecureChannelCredentials()//(!)simplify to hostname:port
+                active_hostname + ":" + active_port, grpc::InsecureChannelCredentials()
             )
         )
     );
@@ -165,9 +162,7 @@ IStatus Client::parse_comm_status(std::string msg) { // one way to do it...
     else if (msg == "FAILURE_INVALID")
         return IStatus::FAILURE_INVALID;
     else {
-        //(!)-------------------------------------------------(!)
-        std::cout << "parse_comm_failure msg=" << msg << "\n";
-        //(!)-------------------------------------------------(!)
+        if(DEBUG) std::cout << "parse_comm_failure msg=" << msg << "\n";
         return IStatus::FAILURE_UNKNOWN;
     }
 
@@ -207,9 +202,6 @@ IReply Client::processCommand(std::string& input)
         if (stat.ok()) {
             irepl.comm_status = parse_comm_status(repl.msg());
         } else {
-            //(!)-------------------------------------------------(!)
-            std::cout << "gRPC::Status not ok\n";
-            //(!)-------------------------------------------------(!)
             irepl.comm_status = FAILURE_UNKNOWN; // connection probably terminated on user's end
         }
 
@@ -242,9 +234,6 @@ IReply Client::processCommand(std::string& input)
         if (stat.ok()) {
             irepl.comm_status = parse_comm_status(repl.msg());
         } else {
-            //(!)-------------------------------------------------(!)
-            std::cout << "gRPC::Status not ok\n";
-            //(!)-------------------------------------------------(!)
             irepl.comm_status = FAILURE_UNKNOWN;
         }
             
@@ -275,127 +264,23 @@ int Client::connectTo()
     // Get assigned server from coordinator
     IAssignment iAssigned = FetchAssignment();
     if (!iAssigned.grpc_status.ok()) {
-        std::cout << "gRPC FetchAssignment failed.\n";//(!)
-        std::cout << iAssigned.grpc_status.error_message() << '\n';//(!)
-        std::cout << iAssigned.grpc_status.error_code() << '\n';//(!)
+        std::cerr << "gRPC FetchAssignment failed.\n";
         return -1;
     }
 
     if (iAssigned.cluster_sid == "404" || iAssigned.hostname == "404" || iAssigned.port == "404") {
-        std::cout << "No server found to assign to client\n";//(!)
+        std::cerr << "Server 404 Not Found\n";
         return -1;
     }
     
     // Login to assigned server
     IReply ire = Login(true);
     if(!ire.grpc_status.ok()) {
-        std::cout << "Bad login\n";//(!)
+        std::cerr << "Login Failed\n";
         return -1;
     }
     return 1;
 }
-// void Client::DispatchTimeline() {
-//     /*
-//         Get the timeline working so we can dispatch it to a server, send messages and fetch
-//         messages and then end the timeline before starting a new one. Otherwise we cannot
-//         handoff to another server.
-//     */
-
-//     std::cout << "+--> Press (enter) to send & fetch messages -->\n| ";
-
-//     ClientContext ctx;
-//     // * Set deadline for our RPC
-    
-//     // std::chrono::system_clock::time_point deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(DEADLINE_MS);
-//     // ctx.set_deadline(deadline);
-    
-//     std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> stream (
-//         active_stub_->Timeline(&ctx)
-//     );
-
-
-
-//     // * Issue init message
-//     Message init_msg;
-//     init_msg.set_msg("INIT");
-//     init_msg.set_username(username);
-//     stream->Write(init_msg);
-
-//     /* (!)Somewhere, we are blocking for user input, when we don't want to be(!) */
-//     /*
-//         Maybe we can routinely send an empty message to force client to refresh?
-//     */
-
-
-// 	while(true)	 {
-//         // * Handle all outbounds to server
-// 		std::thread stream_writer([&]() {
-// 			Message outbound_msg;
-//             outbound_msg.set_username(username);
-//             do {
-//                 // * Get user input
-//                 std::string user_in = getPostMessage();
-//                 // * Strip newline so our datastore line delim is protected
-//                 user_in.erase(std::remove(user_in.begin(), user_in.end(), '\n'), user_in.end());
-//                 outbound_msg.set_msg(user_in);
-
-//             } while(stream->Write(outbound_msg));
-
-//             stream->WritesDone();
-// 		});
-//         // * Handle all inbounds to client
-// 		std::thread stream_reader([&]() {
-// 			Message inbound_msg;
-//             while(stream->Read(&inbound_msg)) {
-//                 std::string post_user = inbound_msg.username();
-//                 std::string post_msg = inbound_msg.msg();
-//                 time_t post_time = TimeUtil::TimestampToTimeT(inbound_msg.timestamp());
-
-//                 /*      Pretty print stuff      */
-//                 // * Check if we're above 20 messages
-//                 if (senderv.size() > 19) {
-//                     senderv.erase(senderv.begin());
-//                     messagev.erase(messagev.begin());
-//                     timev.erase(timev.begin());
-//                 }
-//                 // * Add to our buffers
-//                 senderv.push_back(post_user);
-//                 messagev.push_back(post_msg);
-//                 timev.push_back(post_time);
-
-//                 // * Clear screen
-//                 std::system("clear");
-
-//                 // * Render messages
-//                 // (!) cout by terminal width here
-//                 std::cout << "+-------\n";//(!)
-
-//                 for (int i = 0; i < senderv.size(); ++i) {
-//                     std::cout << "| ";
-//                     displayPostMessage(senderv[i], messagev[i], timev[i]);
-//                 }
-//                 int n_clear_space = 20 - senderv.size();
-//                 for (int i = 0; i < 20 - senderv.size(); ++i) {
-//                     std::cout << "|\n";
-//                 }
-                
-//                 std::cout << "+-------\n";//(!)
-//                 std::cout << ">>> Press [Enter] to send & fetch messages >>>\n";
-
-//             }
-// 		});
-//         stream_writer.join();
-// 		stream_reader.join();
-// 	}
-
-//     Status stat = stream->Finish();
-//     if (!stat.ok()) {
-//         std::cout << "Stream failed...\n";
-//         // std::cout << stat.error_code() << "\n";
-//         std::cout << stat.error_message() << "\n";
-//         std::cout << stat.error_details() << "\n";
-//     }
-// }
 void Client::SingleMsgTimelineStream(const std::string& user_in) {
     ClientContext ctx;
     std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> stream {
@@ -437,23 +322,22 @@ void Client::SingleMsgTimelineStream(const std::string& user_in) {
     stream->Finish();
 }
 void Client::pretty_print_messages() {
+
     // * Clear screen
     std::system("clear");
 
-    // * Render messages
-    // (!) cout by terminal width here
-    std::cout << "+-------\n";//(!)
+    // * Print break
+    term_width_break();
 
     for (int i = 0; i < senderv.size(); ++i) {
-        std::cout << "| ";
         displayPostMessage(senderv[i], messagev[i], timev[i]);
     }
     int n_clear_space = 20 - senderv.size();
     for (int i = 0; i < 20 - senderv.size(); ++i) {
-        std::cout << "|\n";
+        std::cout << "\n";
     }
-    
-    std::cout << "+-------\n";//(!)
+
+    term_width_break();
     std::cout << ">>> Press [Enter] to send & fetch messages >>>\n";
 }
 void Client::processTimeline() {
@@ -476,7 +360,7 @@ void Client::processTimeline() {
             active_port = assigned.port();
             IReply irepl = Login();
             if (!irepl.grpc_status.ok()) {
-                std::cout << "something bad happend on secondary server login...\n";
+                if(DEBUG) std::cout << "something bad happend on secondary server login...\n";
             }
         }
 
@@ -488,23 +372,41 @@ void Client::processTimeline() {
     }
 }
 
+void term_width_break() {
+    // * Get window size and render messages
+    winsize wsize;
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &wsize);
+    int width = wsize.ws_col;
+    
+    // Print by terminal width
+    std::cout << "+";
+    for (int i = 0; i < width-2; ++i) {
+        std::cout << "-";
+    }
+    std::cout << "+\n";
+}
+
+bool is_numeric(const std::string& s) {
+    return !s.empty() &&
+        std::find_if(   s.begin(),
+                        s.end(),
+                        [](unsigned char c) { return !std::isdigit(c); }) == s.end();
+}
+
 int main(int argc, char** argv) {
 
-    /*
-    Simplified args:
-        -c <coordinatorIP>:<coordinatorPort>
-        -p <port>
-        -i <clientID>
-    */
-    if (argc == 1) {//(!)
-        std::cout << "Calling convention for client:\n\n";
-        std::cout << "./tsn_client -c <coordIP>:<coordPort> -p <clientPort> -i <clientID>\n\n";
+    std::string helper = 
+        "Calling convention for client:\n\n"
+        "./tsn_client -c <coordIP>:<coordPort> -p <clientPort> -i <clientID>\n\n";
+
+    if (argc == 1) {
+        std::cout << helper;        
         return 0;
     }
 
     std::string coord_host;
     std::string coord_port;
-    std::string clientID = "3010";
+    std::string clientID = "777";
     int opt = 0;
     while ((opt = getopt(argc, argv, "c:p:i:")) != -1){
         switch(opt) {
@@ -519,7 +421,13 @@ int main(int argc, char** argv) {
                 break;
             default:
                 std::cerr << "Invalid Command Line Argument\n";
+                std::cerr << helper;
         }
+    }
+
+    if (!is_numeric(clientID)) {
+        std::cout << "CID must be a numeric value, exiting...\n";
+        return 0;
     }
 
     Client myc(coord_host, coord_port, clientID);

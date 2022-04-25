@@ -3,7 +3,6 @@
 #include <grpc++/grpc++.h>
 #include "sns.grpc.pb.h"
 
-// Bad practice, but we only include in tsd.cc so should be fine
 using grpc::ServerReaderWriter;
 using csce438::Message;
 
@@ -15,8 +14,7 @@ using csce438::Message;
 #define FAILURE_INVALID             ("FAILURE_INVALID")
 #define FAILURE_UNKNOWN             ("FAILURE_UNKNOWN")
 
-// Store username->followers in memory which enables us to track the followers for
-// a given user and conduct some operations on them
+
 struct User {
     std::string username;
 

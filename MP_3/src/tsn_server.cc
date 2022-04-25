@@ -1,42 +1,4 @@
 /* ------- server ------- */
-
-/*
-    FOLLOW - Only track followers.data, we don't care about following.data
-
-        Send FollowUpdate(user, user_to_follow) to Coordinator
-        Coordinator does ClientEntry[user_to_follow].followers += user
-        When SyncService checks in the next time it
-            UpdatesAllFollowers in memory
-            Writes these to all .../$CID/followers.data
-
-
-    LIST
-
-        Read from .../$SID/primary/global_clients.data and fill reply
-        Read from .../$CID/followers.data and fill reply
-
-    UNFOLLOW
-
-        Unimplemented at this stage. Might be as simple as RPC::FollowUpdate(u1, u2, unfollow),
-        but we would want to check that this doesn't mess up any of the *Entry table vectors
-        
-
-    TIMELINE
-        if a user connects that already has timeline file, send latest 20 msgs
-        else, make a new stream
-
-        when a user sends, write to sent_messages.data (local or global)
-
-        periodically check the .../$CID/timeline.data for new messages and send 
-        along stream
-*/
-
-// (!) change all username to cid
-// (!) implement only numeric username/cid
-// (!) safelock class that wraps the SchmokieFS IO functions
-//     and issues lock/lease RPCs
-// (!) or implement a safelock mechanism in SchmokieFS
-
 #include <ctime>
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
@@ -53,7 +15,7 @@
 #include <thread>
 
 #include "tsn_server.h"
-#include "tsn_database.h"
+#include "schmokieFS.h"
 #include "tsn_coordinator.h"
 #include "sns.grpc.pb.h"
 
@@ -79,9 +41,8 @@ using csce438::SNSCoordinatorService;
 
 #define DEFAULT_HOST 				(std::string("0.0.0.0"))
 #define FILE_DELIM   				(std::string("|:|"))
-// Set how often the primary and secondary should check in with coord
-// in milliseconds
-#define HRTBT_FREQ                  (5000)
+#define HRTBT_FREQ                  (7000)
+#define DEBUG                       (0)
 
 class SNSServiceImpl final : public SNSService::Service {
 
@@ -89,14 +50,14 @@ class SNSServiceImpl final : public SNSService::Service {
         // Instead of issuing, try reading from mem like we're aiming to do...
 
         // * Read all from .../$SID/primary/global_clients.data
-        std::vector<std::string> glob_clients = SchmokieFS::PrimaryServer::read_global_clients(cluster_sid);
+        std::vector<std::string> glob_clients = schmokieFS::PrimaryServer::read_global_clients(cluster_sid);
         for (const std::string& cid_: glob_clients) {
             reply->add_all_users(cid_);
         }
 
         // * Read all from .../$CID/followers.data
-        // (!)(!) Calls a SyncService method here. Not allowed!
-        std::vector<std::string> followers = SchmokieFS::SyncService::read_followers_by_cid(cluster_sid, request->username(), "primary"); 
+        // Technically calls a SyncService method here. We would add its own in the real world
+        std::vector<std::string> followers = schmokieFS::SyncService::read_followers_by_cid(cluster_sid, request->username(), "primary"); 
         for (const std::string& cid_: followers) {
             reply->add_following_users(cid_);
         }
@@ -106,7 +67,6 @@ class SNSServiceImpl final : public SNSService::Service {
         return Status::OK;
     }
     Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
-        // (!)(!)(!) Refactor to use datastore, try different SyncService refresh frequencies
         /*
             Propogate coordinator response to client
 
@@ -133,7 +93,7 @@ class SNSServiceImpl final : public SNSService::Service {
         // * Issue RPC::FollowUpdate(follower, followee) --- the coordinator will tell us if
         //   a. followee exists
         //   b. followee is not already being followed by follower
-        Request req;        // (!) RPC can just take the request parameter instead of copying
+        Request req;
         req.set_username(follower);
         req.add_arguments(followee);
 
@@ -141,7 +101,6 @@ class SNSServiceImpl final : public SNSService::Service {
         ClientContext ctx;
         Status stat = coord_stub_->FollowUpdate(&ctx, req, &repl);
 
-        // reply->set_msg(repl.msg());
         // * Translate pseudo-HTTP error codes to SNS codes
         if (repl.msg() == "200") {
             reply->set_msg("SUCCESS");
@@ -154,14 +113,12 @@ class SNSServiceImpl final : public SNSService::Service {
         // * Return status of FollowUpdate
         return stat;
     }
-
     Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
 
         std::cout << "\nGot unimplemented UnFollow RPC\n\n";
         return Status::OK;
 
     }
-  
     Status Login(ServerContext* context, const Request* request, Reply* reply) override {
         std::string cid_ = request->username();
         bool isFirst = request->arguments(0) == "first";
@@ -177,111 +134,54 @@ class SNSServiceImpl final : public SNSService::Service {
         if (isFirst) {
             // * If this is their first login to us, we want to set their timeline
             //   to unread. This allows old users to join and see previous chats.
-            SchmokieFS::PrimaryServer::set_timeline_unread(cluster_sid, cid_);
+            schmokieFS::PrimaryServer::set_timeline_unread(cluster_sid, cid_);
         }
 
         // * Still init client filesystem in case they didn't have a timeline
-        SchmokieFS::PrimaryServer::init_client_fs(cluster_sid, cid_);
+        schmokieFS::PrimaryServer::init_client_fs(cluster_sid, cid_);
         
         // * Set status message
         reply->set_msg("SUCCESS");
 
         return Status::OK;
     }
-
-    //(!)(!)(!) Must handle returning user case, where we need to send them 20 off the bat, even if they
-    //          are marked as 0
-    //          SOL: On client disco -> set last 20 data entries as IOflag=1 (to be read)
     Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
+        /* A single use stream which takes a new client message and sends their forwards */
         
         /* ------- Inbound messages Client->Server->sent_messages.data ------- */
-        // ------- Inbound, 2 msgs for now...INIT, msg_new
         Message init_msg;
         std::string client_cid;
         stream->Read(&init_msg);
-        if (init_msg.msg() != "INIT") {
-            std::cout << "EXPECTED INIT ON TIMELINE\n";//(!)
-        }
         client_cid = init_msg.username();
 
         Message inbound_msg;
         stream->Read(&inbound_msg);
         // * Write inbound_msg to .../$SID/primary/sent_messages.data so SyncService can propogate it
-        SchmokieFS::PrimaryServer::write_to_sent_msgs(cluster_sid, inbound_msg);
+        schmokieFS::PrimaryServer::write_to_sent_msgs(cluster_sid, inbound_msg);
 
         
         /* ------- Outbound messages timeline.data->Server->Client ------- */
-        // ------- Outbound
-        std::vector<Message> new_msgs = SchmokieFS::PrimaryServer::read_new_timeline_msgs(cluster_sid, client_cid);
+        std::vector<Message> new_msgs = schmokieFS::PrimaryServer::read_new_timeline_msgs(cluster_sid, client_cid);
         for (const auto& msg_: new_msgs) {
-            // (!)------------------------------------------(!)
-            std::cout << "writing to client: " << msg_.msg() << "\n";
-            // (!)------------------------------------------(!)
+            if(DEBUG) std::cout << "writing to client: " << msg_.msg() << "\n";
             stream->Write(msg_);
         }
         return Status::OK;
-
-
-        //////////////////////////////////////////////////////////////////////////////
-        // /*
-        //     TIMELINE
-        //     if a user connects that already has timeline file, send latest 20 msgs
-        //     else, make a new stream
-
-        //     when a user sends, write to sent_messages.data (local or global)
-
-        //     periodically check the .../$CID/timeline.data for new messages and send 
-        //     along stream
-        // */
-
-        // Message init_msg;
-        // stream->Read(&init_msg);
-        // if (init_msg.msg() != "INIT") {
-        //     std::cout << "IMPROPERLY ORDER TIMELINE INIT!\n";//(!)
-        // }
-        
-        // std::string cid = init_msg.username();
-        // User* usr = get_user_entry(cid);
-        // usr->set_stream(stream);
-        
-        // while(true) {
-        //     /* ------- Inbound messages Client->Server->sent_messages.data ------- */
-        //     // * Handle messages inbound on stream and write to .../$SID/sent_messages.data
-        //     Message inbound_msg;
-        //     while (stream->Read(&inbound_msg)) {
-        //         // * Write inbound_msg to .../$SID/primary/sent_messages.data so SyncService can propogate it
-        //         SchmokieFS::PrimaryServer::write_to_sent_msgs(cluster_sid, inbound_msg);
-
-        //         // /* ------- Outbound messages timeline.data->Server->Client ------- */
-        //         std::vector<Message> new_msgs = SchmokieFS::PrimaryServer::read_new_timeline_msgs(cluster_sid, cid);
-        //         for (const auto& msg_: new_msgs) {
-
-        //             // (!)------------------------------------------(!)
-        //             std::cout << "writing to client: " << msg_.msg() << "\n";
-        //             // (!)------------------------------------------(!)
-
-        //             stream->Write(msg_);
-        //         }
-
-        //     }
-        // }
-
-        // // * Make the compiler happy
-        // return Status::OK;
-        //////////////////////////////////////////////////////////////////////////////
     }
 
     std::string coordinator_addr;
     std::string cluster_sid;
     std::string port;
     std::vector<User> users;
+    // The assigned type this server was spun up as
     ServerType type_at_init;
-    // Guards against unlikely race condition at type_at_init with
+
+    // Guards against unlikely race condition at is_active with
     // this main() thread and SendHeartbeat() thread
     std::mutex active_mtx;
+    // could be a std::atomic<bool>
     bool is_active;
     
-
     std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_;
 	void RegisterWithCoordinator();
     User* get_user_entry(const std::string& uname);
@@ -297,8 +197,6 @@ SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::strin
 	port = p;
 	cluster_sid = sid;
 
-	// This may change as server(s) fault, but we'll track what this server was
-	// spun up as [PRIMARY|SECONDARY]
 	type_at_init = t;
     if (type_at_init == ServerType::PRIMARY) {
         is_active = true;
@@ -306,7 +204,7 @@ SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::strin
         is_active = false;
     }
 	
-	// Generate coordinator stub here so we can reuse
+	// * Generate coordinator stub here so we can reuse
 	coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
 		SNSCoordinatorService::NewStub(
 			grpc::CreateChannel(
@@ -315,7 +213,7 @@ SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::strin
 		)
 	);
 
-	// Send registration message
+	// * Send registration message
 	RegisterWithCoordinator();
 }
 void SNSServiceImpl::RegisterWithCoordinator() {
@@ -328,7 +226,7 @@ void SNSServiceImpl::RegisterWithCoordinator() {
 	reg.set_port(port);
 	
 	std::string server_type_str = type_to_string(type_at_init);
-	std::cout << "Registering as type=" << server_type_str << '\n';//(!)
+	if(DEBUG) std::cout << "Registering as type=" << server_type_str << '\n';
 	reg.set_type(server_type_str);
 
 	Reply repl;
@@ -337,17 +235,14 @@ void SNSServiceImpl::RegisterWithCoordinator() {
 	// * Dispatch registration RPC
 	Status stat = coord_stub_->RegisterServer(&ctx, reg, &repl);
 	if (!stat.ok()) {
-		std::cerr << "Server registration error for:\nsid=" << cluster_sid << "\ntype=" << type_at_init << "\n";//(!)
+		std::cerr << "Fatal registration error for:\nsid=" << cluster_sid << ", type=" << type_at_init << "\n";
 	}
 
-	// * Init SchmokieFS server file system
-	SchmokieFS::PrimaryServer::init_server_fs(cluster_sid);
+	// * Init schmokieFS server file system
+	schmokieFS::PrimaryServer::init_server_fs(cluster_sid);
 }
 void SNSServiceImpl::SendHeartbeat() {
-    // (!)---------------------------------------(!)
-    std::cout << "Sending heartbeat\n";
-    // (!)---------------------------------------(!)
-
+    if(DEBUG) std::cout << "Sending heartbeat\n";
 
     Beat send;
     send.set_sid(cluster_sid);
@@ -381,20 +276,19 @@ void SNSServiceImpl::SendHeartbeat() {
     }
 
 
-    // (!)---------------------------------------(!)
-    std::cout << "End heartbeat, server is ";
-    if (is_active) {
-        std::cout << "active\n";
-    } else {
-        std::cout << "inactive\n";
+    if(DEBUG) {
+        std::cout << "End heartbeat, server is ";
+        if (is_active) {
+            std::cout << "active\n";
+        } else {
+            std::cout << "inactive\n";
+        }
     }
-    // (!)---------------------------------------(!)
 }
 void SNSServiceImpl::wait_until_primary() {
     
     while(!is_active) {
-        // (!) could do file copy stuff here ...
-        std::cout << "Do file copy stuff here...\n";
+        if(DEBUG) std::cout << "Backing up primary files\n";
         std::this_thread::sleep_for(std::chrono::milliseconds(HRTBT_FREQ));
     }
 
@@ -410,7 +304,7 @@ User* SNSServiceImpl::get_user_entry(const std::string& uname) {
 
 void RunServer(std::string coord_addr, std::string sid, std::string port_no, ServerType type) {
 	// Spin up server instance
-	std::string server_address = DEFAULT_HOST + ":" + port_no;  //(!) take as arg
+	std::string server_address = DEFAULT_HOST + ":" + port_no; 
 	SNSServiceImpl service(coord_addr, port_no, sid, type);
 	
 
@@ -418,7 +312,7 @@ void RunServer(std::string coord_addr, std::string sid, std::string port_no, Ser
 	builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
 	builder.RegisterService(&service);
 	std::unique_ptr<Server> server(builder.BuildAndStart());
-	std::cout << "Server listening on " << server_address << std::endl; //(!)
+	std::cout << "Server listening on " << server_address << std::endl;
 
     std::thread heartbeat([&]() {
         // * Dispatch a thread to send heartbeat every HRTBT_FREQ ms
@@ -433,20 +327,21 @@ void RunServer(std::string coord_addr, std::string sid, std::string port_no, Ser
 
     heartbeat.join();
 }
+bool is_numeric(const std::string& s) {
+    return !s.empty() &&
+        std::find_if(   s.begin(),
+                        s.end(),
+                        [](unsigned char c) { return !std::isdigit(c); }) == s.end();
+}
 
 int main(int argc, char** argv) {
 
-	/*
-	Simplified args:
-		-c <coordinatorIP>:<coordinatorPort>
-		-p <port>
-		-i <serverID>		should be a std::string of integers
-		-t <type>			[master|primary] or anything else to assign as secondary
-	*/
+    std::string helper =
+        "Calling convention for server:\n\n"
+		"./tsn_server -c <coordIP>:<coordPort> -p <serverPort> -i <serverID> -t <primary|secondary>\n\n";
 
-	if (argc == 1) { //(!)
-		std::cout << "Calling convention for server:\n\n";
-		std::cout << "./tsn_server -c <coordIP>:<coordPort> -p <serverPort> -i <serverID> -t <serverType>\n\n";
+	if (argc == 1) {
+		std::cout << helper;
 		return 0;
 	}
   
@@ -472,13 +367,15 @@ int main(int argc, char** argv) {
 				break;
 			default:
 				std::cerr << "Invalid Command Line Argument\n";
+                std::cerr << helper;
+                return 0;
 		}
 	}
 
-	if (type == ServerType::NONE) {
-		std::cout << "Server type error\n";//(!)
-		return 1;
-	}
+    if (!is_numeric(serverID)) {
+        std::cout << "SID must be a numeric value, exiting\n";
+        return 0;
+    }
 	
 	RunServer(coord, serverID, port, type);
 	return 0;
