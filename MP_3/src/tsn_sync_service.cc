@@ -50,8 +50,11 @@ using csce438::Forward;
 using csce438::FlaggedDataEntry;
 using csce438::SNSCoordinatorService;
 
-#define DEFAULT_HOST    (std::string("0.0.0.0"))
-#define SLEEP_MS        (7000)
+#define DEFAULT_HOST        (std::string("0.0.0.0"))
+
+// Set how often the sync services propogate data across clusters
+// in milliseconds
+#define SYNC_FREQ           (1000)
 
 struct ClientFollowerEntry {
     std::string cid;
@@ -124,7 +127,9 @@ SyncService::SyncService(const std::string& caddr, const std::string& host, cons
 }
 void SyncService::Spin() {
     while (true) {
-        std::cout << "Issuing spin cycle! then sleeping for " << SLEEP_MS << '\n';//(!)
+        
+        std::system("clear");//(!)
+        std::cout << "Issuing spin cycle! then sleeping for " << SYNC_FREQ << '\n';//(!)
 
         // * Fetch all followers for each client store in client_follower_table,
         //    then write to $CID/followers.data for each
@@ -138,7 +143,7 @@ void SyncService::Spin() {
         ForwardHandler();
 
         // * goodnight, sweet thread!
-        std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_MS));
+        std::this_thread::sleep_for(std::chrono::milliseconds(SYNC_FREQ));
     }
 }
 std::vector<std::string> SyncService::FetchFollowersForUser(const std::string& cid) {
@@ -256,92 +261,6 @@ void SyncService::UpdateGlobalClientTable() {
     SchmokieFS::SyncService::write_global_clients(sid, global_client_table, "primary");
     std::cout << "Updated global clients in memory and on cluster disc\n";//(!)
 }
-// void SyncService::check_new_local_msgs() { // ---(!) DEPRECATED?
-//     /*
-//         Check for outbound client messages in .../$CID/sent_messages.tmp and read them into
-//         memory. Remove this file so we don't double send. These messages are buffered
-//         next time we do a forward exchange with the coordinator.
-//     */
-//     //(!) debuggovision
-//     // |
-//     // std::cout << "size entries_to_forward before:" << entries_to_forward.size() << "\n";//(!)
-//     // +---(!)
-    
-
-//     // * Update local client table
-//     update_client_follower_table();
-
-//     // * For each local client, check if there are new outbound message(s)
-//     for (const ClientFollowerEntry& client_: client_follower_table) {
-//         // std::vector<FlaggedDataEntry> new_entries = SchmokieFS::SyncService::check_update_by_cid(sid,client_.cid, "primary");
-//         std::vector<FlaggedDataEntry> new_entries = SchmokieFS::SyncService::check_sent_by_cid(sid, client_.cid, "primary");
-//         // * Buffer each message to be forwarded later
-//         for (int i = 0; i < new_entries.size(); ++i) {
-//             entries_to_forward.push(new_entries[i]);
-//         }
-//     }
-
-//     //(!) debuggovision
-//     // |
-//     // std::cout << "size entries_to_forward before:" << entries_to_forward.size() << "\n";//(!)
-//     // std::cout << "entries:\n";
-//     // while (!entries_to_forward.empty()) {
-//     //     std::cout << entries_to_forward.front().entry() << '\n';
-//     //     entries_to_forward.pop();
-//     // }
-//     // +---(!)
-
-//     std::cout << "Pulled local messages into entries_to_forward queue\n";//(!)
-// }
-// std::unordered_set<std::string> SyncService::get_clients_followed() {       // ---(!) DEPRECATED?
-//     // For each local client add those they follow to clients_followed,
-//     // at this point in execution, the client_follower_table should be up to date
-
-//     // * Clear the set
-//     std::unordered_set<std::string> clients_followed;
-
-//     // * Iterate over all local clients
-//     for (const ClientFollowerEntry& e: client_follower_table) {
-//         // * Iterate all clients they follow and add to set iff not already there
-//         for (const std::string& f: e.following) {
-//             if (clients_followed.find(f) == clients_followed.end()) {
-//                 clients_followed.insert(f);
-//             }
-//         }
-//     }
-//     // * return set to caller
-//     return clients_followed;
-// }
-/*RE(!)
-    Outbound:
-
-    Read in .../$SID/primary/sent_messages.data
-
-    for each entry in sent_messages.data        --> Order here matters!
-        Read in entry and extract sender.cid
-        Read in followers of sender.cid
-            ForwardIn{ followers_of_user | sent_message }
-            Send forward to coordinator
-    
-    Inbound:
-
-    Read in Forward{ followers_of_user | sent_message}
-    for each followers_of_user
-        write sent_message to .../$follower_cid/timeline.data where IOflag=1
-
-    
-    -> Some of these incoming will have been local which we bounced back
-    -> Only respects SOME message order
-
-*/
-// RE(!) Just keep the stream open?
-//       Maybe just issue a thread that keeps calling this method?
-/*
-DBG:
-    We're double sending or more likely we are double reading
-    msg doesn't double until we recv it from server
-
-*/
 void SyncService::ForwardHandler() {
 
     std::cout << "Checking for bidi-forwards\n";//(!)

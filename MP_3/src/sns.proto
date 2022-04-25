@@ -44,11 +44,6 @@ service SNSService{
 	rpc Timeline (stream Message) returns (stream Message) {} 
 }
 
-// message ListReply {
-// 	repeated string all_users = 1;
-// 	repeated string followers = 2;
-// }
-
 message Request {
 	string username = 1;
 	repeated string arguments = 2;
@@ -61,41 +56,48 @@ message Reply {
 }
 
 message Message {
-	//Username who sent the message
 	string username = 1;
-	//Message from the user
 	string msg = 2;
-	//Time the message was sent
 	google.protobuf.Timestamp timestamp = 3;
 }
 /* ------- MP3 Changes ------- */
-// --- Coordinator stuff
+
 service SNSCoordinatorService {
 	// --- Server
 	// Save this server in coordinator routing table
 	rpc RegisterServer (Registration) returns (Reply) {}
 	// Request::username should now be added to Request::arguments[0]'s followers.data
 	rpc FollowUpdate (Request) returns (Reply) {}
+	// Check server status, controlled timeout
+	rpc Heartbeat (Beat) returns (Beat) {}
 
 	// --- Client
 	// Get the client assignment so they can comm w/ server, save their CID
 	rpc FetchAssignment (Request) returns (Assignment) {}
 	
-	// --- SyncServ
-	// Register the sync service, give info to open stream
+	// --- SyncService
+	// Register the sync service, give info to open forward stream
 	rpc RegisterSyncService (Registration) returns (Reply) {}
 	// Respond with all registered users for all server clusters
 	rpc FetchGlobalClients (Request) returns (GlobalUsers) {}
 	// Respond with all followers for given user
 	rpc FetchFollowers (Request) returns (Reply) {}
-	// Issued by a SyncService, forward messages TO coordinator, then waits
-	// for any messages forwarded FROM coordinator. Stream is unique to this call.
-	// (!) can be simplified as a SetOfForwards each way
+	// Issued by a SyncService, forward messages to coordinator, then waits
+	// for any messages forwarded from coordinator. Stream is unique to this call.
 	rpc ForwardEntryStream (stream Forward) returns (stream Forward) {}
+}
+
+// For heartbeat protocol
+message Beat {
+	// Cluster sid for this 
+	string sid = 1;
+	// Server sends it's assigned type, if Coordinator responds with
+	// a different type, server changes role (promotion/demotion)
+	string server_type = 2;
 }
 // For registering server w/ coordinator
 message Registration {
-	string sid = 1;	// cluster SID
+	string sid = 1;	// cluster SID to register
 	string hostname = 2;
 	string port = 3;
 	string type = 4; // primary, secondary, sync
@@ -110,15 +112,14 @@ message Assignment {
 message GlobalUsers {
 	repeated string cid = 2;
 }
-// Plaintext which represents one line in a database with IO flag=0
-// (!) becomes FlaggedDataEntry
+// Plaintext which represents one line in a database with IO flag=1
 message FlaggedDataEntry {
 	// simplifies msg routing
 	string cid = 1;
 	// entry = { 1|:|TIME|:|CID|:|MSG }
 	string entry = 2;
 }
-
+// Message forwards to/from SyncService and Coordinator
 message Forward {
 	repeated string cid = 1;
 	string entry = 2;

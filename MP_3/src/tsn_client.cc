@@ -11,6 +11,8 @@
 #include <ctime>
 #include <vector>
 #include <thread>
+#include <chrono>
+
 #include <grpc++/grpc++.h>
 #include <google/protobuf/timestamp.pb.h>
 #include <google/protobuf/duration.pb.h>
@@ -33,6 +35,8 @@ using csce438::Assignment;
 using csce438::SNSCoordinatorService;
 using google::protobuf::util::TimeUtil;
 using google::protobuf::Timestamp;
+
+#define DEADLINE_MS     (1000)
 
 class Client : public IClient {
 public:
@@ -68,9 +72,12 @@ private:
 
     // Helpers
     IAssignment FetchAssignment();
-    IReply Login();
+    IReply Login(bool isFirst);
     IStatus parse_comm_status(std::string s);
     std::vector<std::string> parse_input_str(std::string in, std::string delim=" ");
+    void SingleMsgTimelineStream(const std::string& user_in);
+    void SingleMsgTimelineStream_(); //(!)
+    void pretty_print_messages();
 
     // For last 20 messages, this is hacky but whatever
     std::vector<std::string> senderv;
@@ -100,9 +107,20 @@ IAssignment Client::FetchAssignment() {
 
     return iAssigned;
 }
-IReply Client::Login() {
+IReply Client::Login(bool isFirst=false) {
+
+    // * If this is the user's first login, the server will send the last 20 
+    //   messages of their timeline (reconnection case)
+
     Request request;
     request.set_username(username);
+
+    // * Set first arg iff this is our first time connecting to this server, this will
+    //   set our timeline as unread so we are served our previous messages
+    if (isFirst) {
+        request.add_arguments("first");
+    }
+
     Reply reply;
     ClientContext context;
 
@@ -269,90 +287,205 @@ int Client::connectTo()
     }
     
     // Login to assigned server
-    IReply ire = Login();
+    IReply ire = Login(true);
     if(!ire.grpc_status.ok()) {
         std::cout << "Bad login\n";//(!)
         return -1;
     }
     return 1;
 }
-void Client::processTimeline() {
-    // Send msg, get resp, repeat
-    std::string uname = username;
+// void Client::DispatchTimeline() {
+//     /*
+//         Get the timeline working so we can dispatch it to a server, send messages and fetch
+//         messages and then end the timeline before starting a new one. Otherwise we cannot
+//         handoff to another server.
+//     */
 
+//     std::cout << "+--> Press (enter) to send & fetch messages -->\n| ";
+
+//     ClientContext ctx;
+//     // * Set deadline for our RPC
+    
+//     // std::chrono::system_clock::time_point deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(DEADLINE_MS);
+//     // ctx.set_deadline(deadline);
+    
+//     std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> stream (
+//         active_stub_->Timeline(&ctx)
+//     );
+
+
+
+//     // * Issue init message
+//     Message init_msg;
+//     init_msg.set_msg("INIT");
+//     init_msg.set_username(username);
+//     stream->Write(init_msg);
+
+//     /* (!)Somewhere, we are blocking for user input, when we don't want to be(!) */
+//     /*
+//         Maybe we can routinely send an empty message to force client to refresh?
+//     */
+
+
+// 	while(true)	 {
+//         // * Handle all outbounds to server
+// 		std::thread stream_writer([&]() {
+// 			Message outbound_msg;
+//             outbound_msg.set_username(username);
+//             do {
+//                 // * Get user input
+//                 std::string user_in = getPostMessage();
+//                 // * Strip newline so our datastore line delim is protected
+//                 user_in.erase(std::remove(user_in.begin(), user_in.end(), '\n'), user_in.end());
+//                 outbound_msg.set_msg(user_in);
+
+//             } while(stream->Write(outbound_msg));
+
+//             stream->WritesDone();
+// 		});
+//         // * Handle all inbounds to client
+// 		std::thread stream_reader([&]() {
+// 			Message inbound_msg;
+//             while(stream->Read(&inbound_msg)) {
+//                 std::string post_user = inbound_msg.username();
+//                 std::string post_msg = inbound_msg.msg();
+//                 time_t post_time = TimeUtil::TimestampToTimeT(inbound_msg.timestamp());
+
+//                 /*      Pretty print stuff      */
+//                 // * Check if we're above 20 messages
+//                 if (senderv.size() > 19) {
+//                     senderv.erase(senderv.begin());
+//                     messagev.erase(messagev.begin());
+//                     timev.erase(timev.begin());
+//                 }
+//                 // * Add to our buffers
+//                 senderv.push_back(post_user);
+//                 messagev.push_back(post_msg);
+//                 timev.push_back(post_time);
+
+//                 // * Clear screen
+//                 std::system("clear");
+
+//                 // * Render messages
+//                 // (!) cout by terminal width here
+//                 std::cout << "+-------\n";//(!)
+
+//                 for (int i = 0; i < senderv.size(); ++i) {
+//                     std::cout << "| ";
+//                     displayPostMessage(senderv[i], messagev[i], timev[i]);
+//                 }
+//                 int n_clear_space = 20 - senderv.size();
+//                 for (int i = 0; i < 20 - senderv.size(); ++i) {
+//                     std::cout << "|\n";
+//                 }
+                
+//                 std::cout << "+-------\n";//(!)
+//                 std::cout << ">>> Press [Enter] to send & fetch messages >>>\n";
+
+//             }
+// 		});
+//         stream_writer.join();
+// 		stream_reader.join();
+// 	}
+
+//     Status stat = stream->Finish();
+//     if (!stat.ok()) {
+//         std::cout << "Stream failed...\n";
+//         // std::cout << stat.error_code() << "\n";
+//         std::cout << stat.error_message() << "\n";
+//         std::cout << stat.error_details() << "\n";
+//     }
+// }
+void Client::SingleMsgTimelineStream(const std::string& user_in) {
     ClientContext ctx;
-    std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> stream (
+    std::shared_ptr<grpc::ClientReaderWriter<Message, Message>> stream {
         active_stub_->Timeline(&ctx)
-    );
+    };
 
-    while (true) {
-        std::thread writer([&]() {
-            // * Init connection, don't bother timestamping inits
-            Message client_msg;
-            client_msg.set_username(uname);
-            client_msg.set_msg("INIT");
+    // * Send init message, always first
+    Message init_msg;
+    init_msg.set_username(username);
+    init_msg.set_msg("INIT");
+    stream->Write(init_msg);
 
-            // All remaining messages are taken from stdin
-            while (stream->Write(client_msg)) {
-                
-                
-                // client_msg.set_msg(getPostMessage());
-                
-                std::string outbound_msg = getPostMessage();
-                outbound_msg.erase(std::remove(outbound_msg.begin(), outbound_msg.end(), '\n'), outbound_msg.end());
-                client_msg.set_msg(outbound_msg);
+    // * Send the outbound message we just got from user
+    Message outbound_msg;
+    outbound_msg.set_username(username);
+    // outbound_msg.set_msg(getPostMessage());
+    outbound_msg.set_msg(user_in);
+    stream->Write(outbound_msg);
+    stream->WritesDone();
 
-                Timestamp t = Timestamp();
-                client_msg.release_timestamp();
-                client_msg.set_allocated_timestamp(&t);
-            }
-            stream->WritesDone();
-        });
-        std::thread reader([&]() {
-            Message serv_msg;
-            while (stream->Read(&serv_msg)) {
-                // * Extract sender, msg, time
-                std::string post_user = serv_msg.username();
-                std::string post_msg = serv_msg.msg();
-                time_t post_time = TimeUtil::TimestampToTimeT(serv_msg.timestamp());
+    // * Read any inbound messages, do not render yet
+    Message inbound_msg;
+    while(stream->Read(&inbound_msg)) {
+        std::string post_user = inbound_msg.username();
+        std::string post_msg = inbound_msg.msg();
+        time_t post_time = TimeUtil::TimestampToTimeT(inbound_msg.timestamp());
 
-                // * Check if we're above 20 messages
-                if (senderv.size() > 19) {
-                    senderv.erase(senderv.begin());
-                    messagev.erase(messagev.begin());
-                    timev.erase(timev.begin());
-                }
-                // * Add to our buffer
-                senderv.push_back(post_user);
-                messagev.push_back(post_msg);
-                timev.push_back(post_time);
+        // * Check if we're above 20 messages
+        if (senderv.size() > 19) {
+            senderv.erase(senderv.begin());
+            messagev.erase(messagev.begin());
+            timev.erase(timev.begin());
+        }
+        // * Add to our buffers
+        senderv.push_back(post_user);
+        messagev.push_back(post_msg);
+        timev.push_back(post_time);
+    }
+    stream->Finish();
+}
+void Client::pretty_print_messages() {
+    // * Clear screen
+    std::system("clear");
 
-                // * Clear screen
-                std::system("clear");
+    // * Render messages
+    // (!) cout by terminal width here
+    std::cout << "+-------\n";//(!)
 
-                // * Render messages
-                std::cout << "+-------\n";
-                for (int i = 0; i < senderv.size(); ++i) {
-                    std::cout << "| ";
-                    displayPostMessage(senderv[i], messagev[i], timev[i]);
-                }
-                int n_clear_space = 20 - senderv.size();
-                for (int i = 0; i < 20 - senderv.size(); ++i) {
-                    std::cout << "|\n";
-                }
-                std::cout << "+-------\n";
-            }
-        });
-        reader.join();
-        writer.join();    
+    for (int i = 0; i < senderv.size(); ++i) {
+        std::cout << "| ";
+        displayPostMessage(senderv[i], messagev[i], timev[i]);
+    }
+    int n_clear_space = 20 - senderv.size();
+    for (int i = 0; i < 20 - senderv.size(); ++i) {
+        std::cout << "|\n";
     }
     
+    std::cout << "+-------\n";//(!)
+    std::cout << ">>> Press [Enter] to send & fetch messages >>>\n";
+}
+void Client::processTimeline() {
+    std::cout << ">>> Press [Enter] to send & fetch messages >>>\n";
+    while(true) {
+        // SingleMsgTimelineStream();
+        // * Collect input from user, this could scale to multiple messages -- block
+        std::string user_in = getPostMessage();
+        user_in.erase(std::remove(user_in.begin(), user_in.end(), '\n'), user_in.end());
 
-    Status stat = stream->Finish();
-    if (!stat.ok()) {
-        std::cout << "Stream failed...\n";
+        // * Checkin with the coordinator for active server
+        ClientContext ctx;
+        Request req;
+        req.set_username(username);
+        Assignment assigned;
+        Status stat = coord_stub_->FetchAssignment(&ctx, req, &assigned);
+
+        // * If active port has changed, make a new active stub
+        if (assigned.port() != active_port) {
+            active_port = assigned.port();
+            IReply irepl = Login();
+            if (!irepl.grpc_status.ok()) {
+                std::cout << "something bad happend on secondary server login...\n";
+            }
+        }
+
+        // * Open a timeline stream with active server which sends this message and fetches new ones
+        SingleMsgTimelineStream(user_in);
+
+        // * Render these messages to the user
+        pretty_print_messages();
     }
-
 }
 
 int main(int argc, char** argv) {

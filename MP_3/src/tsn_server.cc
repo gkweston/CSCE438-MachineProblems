@@ -49,6 +49,8 @@
 #include <string>
 #include <stdlib.h>
 #include <unistd.h>
+#include <mutex>
+#include <thread>
 
 #include "tsn_server.h"
 #include "tsn_database.h"
@@ -72,14 +74,17 @@ using csce438::Reply;
 using csce438::SNSService;
 using csce438::Registration;
 using csce438::GlobalUsers;
+using csce438::Beat;
 using csce438::SNSCoordinatorService;
 
 #define DEFAULT_HOST 				(std::string("0.0.0.0"))
 #define FILE_DELIM   				(std::string("|:|"))
+// Set how often the primary and secondary should check in with coord
+// in milliseconds
+#define HRTBT_FREQ                  (5000)
 
 class SNSServiceImpl final : public SNSService::Service {
 
-    // RE(!) Huge non datastore shortcut to debug other componenets
     Status List(ServerContext* context, const Request* request, Reply* reply) override {
         // Instead of issuing, try reading from mem like we're aiming to do...
 
@@ -99,75 +104,7 @@ class SNSServiceImpl final : public SNSService::Service {
         reply->set_msg("SUCCESS");
 
         return Status::OK;
-
-        //(!)-------------------------------------------------(!)
-        //(!)-------------------------------------------------(!)
-        //(!)-------------------------------------------------(!)
-        // // (!)(!)(!) Refactor to use datastore, try different SyncService refresh frequencies
-
-        // // * Get global users from coordinator
-        // Request req;
-        // // req.set_username("SYNC");//(!)
-        // req.set_username(request->username());
-        // req.add_arguments("SERVER");
-        // GlobalUsers glob;
-        // ClientContext ctx;
-        // Status stat = coord_stub_->FetchGlobalClients(&ctx, req, &glob);
-        // if (!stat.ok()) {
-        //     std::cout << "ERR on FetchGlobalClients for server\n";//(!)
-        // }
-
-        // // * Copy to response
-        // for (int i = 0; i < glob.cid_size(); ++i) {
-        //     reply->add_all_users(glob.cid(i));
-        // }
-        
-
-        // // * Get followers from coord
-        // Request req2;
-        // req2.set_username(request->username());
-        // req2.add_arguments("SERVER");
-        // Reply repl2;
-        // ClientContext ctx2;
-        // Status stat2 = coord_stub_->FetchFollowers(&ctx2, req2, &repl2);
-        // if (!stat2.ok()) {
-        //     std::cout << "ERR on FetchFollowers for server\n";//(!)
-        // }
-
-        // // * Copy to response
-        // for (int i = 0; i < repl2.following_users_size(); ++i) {
-        //     reply->add_following_users(repl2.following_users(i));
-        // }
-
-        // return Status::OK;
-        //(!)-------------------------------------------------(!)
-        //(!)-------------------------------------------------(!)
-        //(!)-------------------------------------------------(!)
-
-        // // Fill the all_users protobuf, when we find current
-        // // user's name we save their entry to copy followers
-        // User* this_user = nullptr;
-        // for (int i = 0; i < users.size(); i++) {
-        //     std::string uname = users[i].username;
-        //     reply->add_all_users(uname.c_str());
-        //     if (uname == request->username()) {
-        //         this_user = &users[i];
-        //     }
-        // }
-        // // Check if username not found in users
-        // if (this_user == nullptr) {
-        //     reply->set_msg(FAILURE_INVALID_USERNAME);
-        //     return Status::OK;
-        // }
-        // // Copy following users
-        // for (int i = 0; i < this_user->followers.size(); i++) {
-        //     reply->add_following_users(this_user->followers[i].c_str());
-        // }
-        // reply->set_msg(SUCCESS);
-        // return Status::OK;
     }
-
-    // RE(!) Huge non datastore shortcut to debug other componenets
     Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
         // (!)(!)(!) Refactor to use datastore, try different SyncService refresh frequencies
         /*
@@ -216,203 +153,142 @@ class SNSServiceImpl final : public SNSService::Service {
 
         // * Return status of FollowUpdate
         return stat;
-
-        // std::string uname = request->username();
-        // std::string uname_to_follow = request->arguments(0);
-
-        // // check if uname_to_follow is in following, if not add it
-        // get_user_entry(uname)->push_following(uname_to_follow);
-
-        // // User is trying to follow themselves, which is done automatically on login
-        // if (uname_to_follow == uname) {
-        //     reply->set_msg(FAILURE_ALREADY_EXISTS);
-        //     return Status::OK;
-        // }
-        // // Check if user is trying to follow one which DNE
-        // User* ufollow_entry = get_user_entry(uname_to_follow);
-        // if (ufollow_entry == nullptr) {
-        //     reply->set_msg(FAILURE_NOT_EXISTS);
-        //     return Status::OK;
-        // } 
-        // // Check if user is trying to follow a user they already follow
-        // if (ufollow_entry->is_follower(uname) == -1) {
-        //     ufollow_entry->followers.push_back(uname);
-        //     reply->set_msg(SUCCESS);
-        //     return Status::OK;    
-        // }
-        // reply->set_msg(FAILURE_ALREADY_EXISTS);
-        // return Status::OK;
     }
 
     Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
-        
 
         std::cout << "\nGot unimplemented UnFollow RPC\n\n";
         return Status::OK;
-        
-        // /* To test:
-        //     a. If user tries to unfollow themselves
-        //     b. If user tries to unfollow a user they dont
-        //     c. If user tries to unfollow a user which doesn't exist
-        //     d. If user tries to unfollow a user which does exist
-        // */
 
-        // std::string uname = request->username();
-        // std::string unfollow_name = request->arguments(0);
-
-        // // check if unfollow_name is in following, if so remove it
-        // get_user_entry(uname)->pop_following(unfollow_name);
-
-        // // Check if user tries to unfollow themselves, which we prevent
-        // if (uname == unfollow_name) {
-        //     reply->set_msg(FAILURE_INVALID_USERNAME);
-        //     return Status::OK;
-        // }
-        // User* ufollow_entry = get_user_entry(unfollow_name);
-        // // Check if user tries to follow one which DNE
-        // if (ufollow_entry == nullptr) {
-        //     reply->set_msg(FAILURE_NOT_EXISTS);
-        //     return Status::OK;
-        // }
-        // // Check if user tries to unfollow one which they don't follow
-        // if (ufollow_entry->pop_follower(uname)) {
-        //     reply->set_msg(SUCCESS);
-        // } else {
-        //     reply->set_msg(FAILURE_INVALID_USERNAME);   // Wasn't following
-        // }
-        // return Status::OK;
     }
   
     Status Login(ServerContext* context, const Request* request, Reply* reply) override {
-
-        // * Init user entry
-        User uentry(request->username());
-        users.push_back(uentry);
-
-        // * Init client filesystem
         std::string cid_ = request->username();
+        bool isFirst = request->arguments(0) == "first";
+
+        // * Init user entry if it DNE
+        User* uptr = get_user_entry(cid_);
+        if (uptr == nullptr) {
+            // * New user we haven't encountered yet
+            User uentry(request->username());
+            users.push_back(uentry);
+        }
+
+        if (isFirst) {
+            // * If this is their first login to us, we want to set their timeline
+            //   to unread. This allows old users to join and see previous chats.
+            SchmokieFS::PrimaryServer::set_timeline_unread(cluster_sid, cid_);
+        }
+
+        // * Still init client filesystem in case they didn't have a timeline
         SchmokieFS::PrimaryServer::init_client_fs(cluster_sid, cid_);
-        return Status::OK;
         
-        // // * Check if uname already, use the previous entry in memory
-        // std::string uname = request->username();
-        // for (int i = 0; i < users.size(); i++) {
-        //     if (users[i].username == uname) {
-        //         return Status::OK;
-        //     }
-        // }
-        // // * Add to user table and return OK
-        // User uentry(uname);
-        // users.push_back(uentry);
-        // return Status::OK;
+        // * Set status message
+        reply->set_msg("SUCCESS");
+
+        return Status::OK;
     }
 
     //(!)(!)(!) Must handle returning user case, where we need to send them 20 off the bat, even if they
     //          are marked as 0
     //          SOL: On client disco -> set last 20 data entries as IOflag=1 (to be read)
     Status Timeline(ServerContext* context, ServerReaderWriter<Message, Message>* stream) override {
-        /*
-            TIMELINE
-            if a user connects that already has timeline file, send latest 20 msgs
-            else, make a new stream
-
-            when a user sends, write to sent_messages.data (local or global)
-
-            periodically check the .../$CID/timeline.data for new messages and send 
-            along stream
-        */
-        while(true) {
-            /* ------- Inbound messages Client->Server->sent_messages.data ------- */
-            // * Handle messages inbound on stream and write to .../$SID/sent_messages.data
-            Message inbound_msg;
-            while (stream->Read(&inbound_msg)) {
-                std::string cid = inbound_msg.username();
-                std::string msg = inbound_msg.msg();
-
-                // * Handle INIT msg
-                if (msg == "INIT") {
-                    User* usr = get_user_entry(cid);
-                    if (usr == nullptr) {
-                        std::cout << "Could not get user entry for cid=" << cid << '\n';//(!)
-                        return Status::CANCELLED;
-                    }
-                    // * Save stream in user table and turn on timeline mode for user
-                    usr->set_stream(stream);
-                    continue;
-                }
-
-                // * Write inbound_msg to .../$SID/primary/sent_messages.data so SyncService can propogate it
-                SchmokieFS::PrimaryServer::write_to_sent_msgs(cluster_sid, inbound_msg);
-            }
-
-            /* ------- Outbound messages timeline.data->Server->Client ------- */
-            // * Check all .../$SID/primary/local_clients/*/timeline.data for new entries
-            //   if one exists, forward it to that user
-            for (const User& usr_: users) {
-                // * Get new messages from timeline.data
-                std::vector<Message> new_msgs = SchmokieFS::PrimaryServer::read_new_timeline_msgs(cluster_sid, usr_.username);
-                // * Forward all new messages to user, if any
-                for (const Message& msg_: new_msgs) {
-                    stream->Write(msg_);
-                }
-            }
+        
+        /* ------- Inbound messages Client->Server->sent_messages.data ------- */
+        // ------- Inbound, 2 msgs for now...INIT, msg_new
+        Message init_msg;
+        std::string client_cid;
+        stream->Read(&init_msg);
+        if (init_msg.msg() != "INIT") {
+            std::cout << "EXPECTED INIT ON TIMELINE\n";//(!)
         }
+        client_cid = init_msg.username();
 
-        // * Make the compiler happy
+        Message inbound_msg;
+        stream->Read(&inbound_msg);
+        // * Write inbound_msg to .../$SID/primary/sent_messages.data so SyncService can propogate it
+        SchmokieFS::PrimaryServer::write_to_sent_msgs(cluster_sid, inbound_msg);
+
+        
+        /* ------- Outbound messages timeline.data->Server->Client ------- */
+        // ------- Outbound
+        std::vector<Message> new_msgs = SchmokieFS::PrimaryServer::read_new_timeline_msgs(cluster_sid, client_cid);
+        for (const auto& msg_: new_msgs) {
+            // (!)------------------------------------------(!)
+            std::cout << "writing to client: " << msg_.msg() << "\n";
+            // (!)------------------------------------------(!)
+            stream->Write(msg_);
+        }
         return Status::OK;
 
-        // while (true) {
-        //     // * read message from stream
-        //     Message recv, send;
-        //     while (stream->Read(&recv)) {
-        //        // * take username
-        //        std::string uname = recv.username();
-        //        std::string rmsg = recv.msg();
-        //        if (rmsg == "INIT") {
-        //            // * find username entry in users table
-        //            User* user = get_user_entry(uname);
-        //            if (user != nullptr) {
-        //                 // * save stream in user table, set timeline mode to true
-        //                 user->set_stream(stream);
-        //            }
-        //            continue; // do not fwd init messages
-        //        }
-        //         // * for each follower in that user, write a message to their stream
-        //         //   iff the stream is open (the follower is in TIMELINE mode)
-        //         /*
-        //             We're using User::following vector for message routing as such
-        //             When user A sends a message
-        //               iterate through ALL users in user table
-        //                 check if they are following A, if so, forward message
 
-        //             NOTE: User::following is different than the User::followers vector
-        //         */
-        //         for (int i = 0; i < users.size(); i++) {
-        //             // * Check user name for follow
-        //             User* u = &users[i];
-        //             if (u->is_following(uname)) {
-        //                 if (u->stream) {
-        //                     // u->stream->Write(send);
-        //                     // Forward recv message
-        //                     u->stream->Write(recv);
-        //                 }
-        //             }
+        //////////////////////////////////////////////////////////////////////////////
+        // /*
+        //     TIMELINE
+        //     if a user connects that already has timeline file, send latest 20 msgs
+        //     else, make a new stream
+
+        //     when a user sends, write to sent_messages.data (local or global)
+
+        //     periodically check the .../$CID/timeline.data for new messages and send 
+        //     along stream
+        // */
+
+        // Message init_msg;
+        // stream->Read(&init_msg);
+        // if (init_msg.msg() != "INIT") {
+        //     std::cout << "IMPROPERLY ORDER TIMELINE INIT!\n";//(!)
+        // }
+        
+        // std::string cid = init_msg.username();
+        // User* usr = get_user_entry(cid);
+        // usr->set_stream(stream);
+        
+        // while(true) {
+        //     /* ------- Inbound messages Client->Server->sent_messages.data ------- */
+        //     // * Handle messages inbound on stream and write to .../$SID/sent_messages.data
+        //     Message inbound_msg;
+        //     while (stream->Read(&inbound_msg)) {
+        //         // * Write inbound_msg to .../$SID/primary/sent_messages.data so SyncService can propogate it
+        //         SchmokieFS::PrimaryServer::write_to_sent_msgs(cluster_sid, inbound_msg);
+
+        //         // /* ------- Outbound messages timeline.data->Server->Client ------- */
+        //         std::vector<Message> new_msgs = SchmokieFS::PrimaryServer::read_new_timeline_msgs(cluster_sid, cid);
+        //         for (const auto& msg_: new_msgs) {
+
+        //             // (!)------------------------------------------(!)
+        //             std::cout << "writing to client: " << msg_.msg() << "\n";
+        //             // (!)------------------------------------------(!)
+
+        //             stream->Write(msg_);
         //         }
+
         //     }
-        // }   // * repeat
+        // }
+
+        // // * Make the compiler happy
         // return Status::OK;
+        //////////////////////////////////////////////////////////////////////////////
     }
 
     std::string coordinator_addr;
     std::string cluster_sid;
     std::string port;
-    ServerType type_at_init;
     std::vector<User> users;
+    ServerType type_at_init;
+    // Guards against unlikely race condition at type_at_init with
+    // this main() thread and SendHeartbeat() thread
+    std::mutex active_mtx;
+    bool is_active;
+    
 
     std::unique_ptr<SNSCoordinatorService::Stub> coord_stub_;
 	void RegisterWithCoordinator();
     User* get_user_entry(const std::string& uname);
+
 public:
+    void SendHeartbeat();
+    void wait_until_primary();
     SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t);
 };
 SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::string sid, ServerType t) {
@@ -424,6 +300,11 @@ SNSServiceImpl::SNSServiceImpl(std::string coord_addr, std::string p, std::strin
 	// This may change as server(s) fault, but we'll track what this server was
 	// spun up as [PRIMARY|SECONDARY]
 	type_at_init = t;
+    if (type_at_init == ServerType::PRIMARY) {
+        is_active = true;
+    } else {
+        is_active = false;
+    }
 	
 	// Generate coordinator stub here so we can reuse
 	coord_stub_ = std::unique_ptr<SNSCoordinatorService::Stub>(
@@ -462,6 +343,62 @@ void SNSServiceImpl::RegisterWithCoordinator() {
 	// * Init SchmokieFS server file system
 	SchmokieFS::PrimaryServer::init_server_fs(cluster_sid);
 }
+void SNSServiceImpl::SendHeartbeat() {
+    // (!)---------------------------------------(!)
+    std::cout << "Sending heartbeat\n";
+    // (!)---------------------------------------(!)
+
+
+    Beat send;
+    send.set_sid(cluster_sid);
+    
+    if (type_at_init == ServerType::PRIMARY) {
+        send.set_server_type("primary");
+    } else {
+        send.set_server_type("secondary");
+    }
+    Beat recv;
+    ClientContext ctx;
+    Status stat = coord_stub_->Heartbeat(&ctx, send, &recv);
+
+    ServerType type_recv = ServerType::PRIMARY;
+    if (recv.server_type() != "primary") {
+        type_recv = ServerType::SECONDARY;
+    }
+
+    // * If server is secondary and type_recv is secondary, that means this server should
+    //   now be active
+    if (type_recv == type_at_init) {
+        // * This server is now the active one on the cluster
+        active_mtx.lock();
+        is_active = true;
+        active_mtx.unlock();
+    } else {
+        // * This server is now innactive on the cluster
+        active_mtx.lock();
+        is_active = false;
+        active_mtx.unlock();
+    }
+
+
+    // (!)---------------------------------------(!)
+    std::cout << "End heartbeat, server is ";
+    if (is_active) {
+        std::cout << "active\n";
+    } else {
+        std::cout << "inactive\n";
+    }
+    // (!)---------------------------------------(!)
+}
+void SNSServiceImpl::wait_until_primary() {
+    
+    while(!is_active) {
+        // (!) could do file copy stuff here ...
+        std::cout << "Do file copy stuff here...\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(HRTBT_FREQ));
+    }
+
+}
 User* SNSServiceImpl::get_user_entry(const std::string& uname) {
     for (int i = 0; i < users.size(); i++) {
         if (users[i].username == uname) {
@@ -474,19 +411,27 @@ User* SNSServiceImpl::get_user_entry(const std::string& uname) {
 void RunServer(std::string coord_addr, std::string sid, std::string port_no, ServerType type) {
 	// Spin up server instance
 	std::string server_address = DEFAULT_HOST + ":" + port_no;  //(!) take as arg
-	// ------->>>(!)
-	// SNSServiceImpl service;
-	// OR
 	SNSServiceImpl service(coord_addr, port_no, sid, type);
-	// <<<-------(!)
+	
 
 	ServerBuilder builder;
 	builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
 	builder.RegisterService(&service);
 	std::unique_ptr<Server> server(builder.BuildAndStart());
-	std::cout << "Server listening on " << server_address << std::endl;
+	std::cout << "Server listening on " << server_address << std::endl; //(!)
+
+    std::thread heartbeat([&]() {
+        // * Dispatch a thread to send heartbeat every HRTBT_FREQ ms
+        while(true) {
+            service.SendHeartbeat();
+            std::this_thread::sleep_for(std::chrono::milliseconds(HRTBT_FREQ));
+        }
+    });
+    service.wait_until_primary();
 
 	server->Wait();
+
+    heartbeat.join();
 }
 
 int main(int argc, char** argv) {

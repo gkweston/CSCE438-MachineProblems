@@ -1,12 +1,14 @@
 /*
 
-"Pseudoclass" Schmokie File System
+"Pseudoclass" Schmokie File System - this represents a real-world distributed
+file system, which would run a server to server distributed read/writes from
+non-local clients.
 
 The format of this (probably) breaks some header file management best-practices,
 but should not break the project. This may be refactored on delivery, or it may
-just be kept this way (because it works!)
+just be kept this way (because it works for our local system!)
 
-tsn_database is a pseudoclass representing the Schmokie File System, which manages
+tsn_database is a pseudoclass representing the Schmokie FileSystem, which manages
 our tsn data on disc. It includes 3 namespaces and a few helpers, all wrapped in
 the namespace SchmokieFS for easy access and seperation.
 
@@ -48,7 +50,7 @@ $FS_CWD/
                 local_clients/
                     ${CID}/
                         timeline.data       P:[RW]<X>, S:[W]<X>
-                        following.data      P:[WR], S:[R]               ---(!) DEPRECATED
+                        following.data      P:[WR], S:[R]
                         followers.data      P:[WR]<X>, S:[WR]<X>
 
 Each P:[R] technically writes a file, as it needs to flip the 1st io_flag byte
@@ -71,8 +73,11 @@ NOTE:   We don't worry about file cleanup if a client disconnects. This could si
         but it's easier to just #include it (for now...)
 */
 
-//(!)(!)(!)(!)(!)(!)(!) pass params as "const T&" where possible (!)(!)(!)(!)(!)(!)(!)
-//(!)(!)(!)(!)(!)(!)(!) use check_mkdir(...)                      (!)(!)(!)(!)(!)(!)(!)
+/*
+ (!) Easy updates:
+    pass params as "const T&" where possible
+    use the newer check_mkdir(...)
+*/
 
 #include <ctime>
 #include <cstdio>
@@ -93,7 +98,6 @@ NOTE:   We don't worry about file cleanup if a client disconnects. This could si
 #include "sns.grpc.pb.h"
 
 using google::protobuf::Timestamp;
-// using google::protobuf::util;
 using csce438::Message;
 using csce438::FlaggedDataEntry;
 
@@ -117,7 +121,7 @@ static std::time_t to_time_t(const std::string& str, bool is_dst = false, const 
     ss >> std::get_time(&t, format.c_str());
     return mktime(&t);
 }
-std::vector<std::string> split_string(std::string s, std::string delim=FILE_DELIM) {    //(!) may be called elsewhere, replace w/ this (!)
+std::vector<std::string> split_string(std::string s, std::string delim=FILE_DELIM) {
     // Split a string on delim
     std::vector<std::string> parts;
     size_t pos = 0;
@@ -214,7 +218,7 @@ bool check_mkdir(const std::string& path_) {
 }
 
 namespace SyncService {
-    // May convert to class as SchmokieFS(sid, ..., etc.) (!)
+
     /*
         Target functionallity
             - Read all clients on this cluster into memory
@@ -278,13 +282,6 @@ namespace SyncService {
         return following;
     }
     std::vector<FlaggedDataEntry> gather_sent_msgs(std::string cluster_sid, std::string stype="primary") {
-
-        /*
-            NEW VERSION IS UNTESTED!!!
-        */
-
-        // - If sent_messages.tmp exists, read and return, delete sent_messages.tmp
-        //     @datastore/$SID/$SERVER_TYPE/local_clients/$CID/sent_messages.data
         // Return a vector of FlaggedDataEntry iff there are messages to forward, and no errors occur
         // else return an empty vector
         
@@ -398,7 +395,6 @@ namespace SyncService {
 }   // end namespace SyncService
 
 namespace PrimaryServer {
-    // May want to convert to class in server as SchmokieFS(sid, ..., etc); (!)
     /*
         Target functionallity
             - Init filesystem for server cluster without disturbing any
@@ -500,10 +496,6 @@ namespace PrimaryServer {
         }
         std::cout << "init_client_fs successful\n";//(!)(!)
     }
-
-/* (!)(T)------- TESTED TO HERE -------(T)(!) */
-
-    // RE(!) update to .../$SID/primary/sent_messages.tmp
     void write_to_sent_msgs(const std::string& sid, const Message& msg) {
         /*
             Takes a single msg
@@ -520,25 +512,6 @@ namespace PrimaryServer {
         // * Write message with newline
         data_stream << entry_str << '\n';
     }
-    
-    
-    // void add_to_following(const std::string& sid, const std::string& follower_cid, const std::string& followee_cid) { // ---(!) DEPRECATED ?
-    //     /*
-    //         Updates the following.data which the server backs up in case of fault, this information
-    //         is served to the user in the LIST command.
-
-    //         NOTE: Clusters do not track followers, this is tracked by coordinator since it is fault
-    //         proof. In reality we would want to track it, which is a pretty easy change to make
-    //         and adds 1 RPC to Server->Coordinator. But this is coordinator fault-tolerance territory
-    //         which is out-of-scope for this assignment.
-    //     */
-
-    //     std::string following_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + follower_cid + "/following.data" ;
-    //     // * Open file and append followee_cid to this file, if it DNE we will create it here, close file
-    //     std::ofstream data_stream(following_path_, std::ios::app);
-    //     data_stream << followee_cid << '\n';
-    // }
-
     std::vector<std::string> read_global_clients(const std::string& sid) {
         /*
             Read in from global_clients.data, this is used to populate the LIST command and tell
@@ -554,23 +527,6 @@ namespace PrimaryServer {
         }
         return glob_clients;
     }
-    
-    // void write_local_msg_to_timeline(const std::string& sid, const std::string& cid_to_recv, const Message& msg) { // ---(!) DEPRECATED ?
-    //     /*
-    //         Write a msg composed as a FlaggedDataEntry to the timeline.data file, this message is a
-    //         local one which the server has already served to the user. Write where IOflag=0 so we
-    //         don't serve duplicates to the user.
-    //     */
-    //     std::string timeline_path_ = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid_to_recv + "/timeline.data";
-    //     // * Open .../$CID/timeline.data if exists, if not create new one
-    //     std::ofstream data_stream(timeline_path_, std::ios::app);
-
-    //     // * Convert Message to FlaggedDataEntry format
-    //     std::string entry = grpc_msg_to_entry_str(msg, "0");
-
-    //     // * Append this entry to the users timeline
-    //     data_stream << entry << '\n';
-    // }
     std::vector<Message> read_new_timeline_msgs(const std::string& sid, const std::string& cid) {
         /*
             Read in timeline entries where IOflag=1, flip this flag to zero, these messages will
@@ -586,36 +542,54 @@ namespace PrimaryServer {
         // * Read get all entries as Message where IOflag=1, flip to zero and return these Messages to be served to user
         return check_timeline_updates(sid, cid);
     }
+    void set_timeline_unread(const std::string& sid, const std::string cid) {
+        /* Set all timeline entries as unread so they are reforwarded to user */
+        std::string timeline_path_no_ext = FS_CWD + "/datastore/" + sid + "/primary/local_clients/" + cid + "/timeline";
+        std::string dpath = timeline_path_no_ext + ".data";
+        std::string tpath = timeline_path_no_ext + ".tmp";
+        
+        if (!file_exists(dpath)) {
+            // * Turns out, they didn't even have one...
+            return;
+        }
+
+        // * Read in from path
+        std::vector<std::string> entries;
+        std::ifstream data_stream_in(dpath);
+        std::string entry;
+        while(getline(data_stream_in, entry)) {
+            entries.push_back(entry);
+        }
+
+        // * Make all IOflag=1
+        for (std::string& e: entries) {
+            e[0] = '1';
+        }
+
+        // * Write to tempfile
+        std::ofstream data_stream_out(tpath);
+        for (const std::string& e: entries) {
+            data_stream_out << e << "\n";
+        }
+
+        // * Rename to .data
+        std::rename(tpath.c_str(), dpath.c_str());
+    }
 }   // end namespace PrimaryServer
 
 namespace SecondaryServer {
     
     /*
-        Target functionallity
+        If we wanted distributed fault tolerance we would issue RPCs or local reads to 
+        back up the database. We leave this undone for now because we treat this database
+        like its own distributed object.
+
+        In the real world, this database would also run a server to received distributed
+        reads/writes from our Primary/Secondary server. That would require us not to use 
+        an actuall server class, which is another large object to link against, bloating
+        our build time further.
     */
+    
+    }    // end namespace SecondaryServer
 
-    // secondary flag is always second in ${CID}/set_messages.data, ${CID}/timeline.data
-    bool flag_idx = false;
-
-    std::vector<std::string> check_update(std::string fname) {
-        /*
-            Get lines, where secondary_flag=1, written in:
-                primary/${CID}/set_messages.data
-                primary/${CID}/timeline.data and
-            and write to
-                secondary/${CID}/set_messages.data
-                secondary${CID}/timeline.data and
-
-            Flip all secondary_flag=1 to 0 when this data
-        */
-
-        // (!)(!)(!) Maybe it makes things simpler to just stat() these files, then copy ALL
-        // without writing so:
-        // A. We don't necessarily need to acquire lock to update secondary files
-        // B. Our get file_diffs method is simplified because those files only have 1 flag
-        // C. We don't need to add a flag to the ${CID}/following.data files
-    }
-
-}   // end namespace SecondaryServer
-
-}   // end namespace SchmokieFS
+}   // end namespace SchmokieFS   

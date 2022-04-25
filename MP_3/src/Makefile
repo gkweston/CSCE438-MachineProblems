@@ -18,8 +18,6 @@ GRPC_CPP_PLUGIN_PATH ?= `which $(GRPC_CPP_PLUGIN)`
 
 all: system-check tsn_client tsn_server tsn_coordinator tsn_sync_service
 
-test_coord: system-check tsn_client tsn_server tsn_coordinator
-
 tsn_client: sns.pb.o sns.grpc.pb.o tsn_client.o
 	$(CXX) $^ $(LDFLAGS) -g -o $@
 

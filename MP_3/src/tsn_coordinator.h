@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <vector>
 #include <unordered_set>
+#include <chrono>
 
 #include "sns.grpc.pb.h"
 using csce438::FlaggedDataEntry;
@@ -82,48 +83,60 @@ struct ServerEntry {
     std::string secondary_port;
     std::string sync_port;
 
-    enum ServerStatus primary_status;
-    enum ServerStatus secondary_status;
+    enum ServerStatus primary_status = ServerStatus::INACTIVE;
+    enum ServerStatus secondary_status = ServerStatus::INACTIVE;
 
-    ServerEntry(std::string s, std::string hname, std::string serve_port, ServerType t): sid(s), hostname(hname) { 
-        if (t == ServerType::PRIMARY) {
-            primary_port = serve_port;
-            primary_status = ServerStatus::ACTIVE;
-            secondary_status = ServerStatus::INACTIVE;
-        } else {
-            secondary_port = serve_port;
-            secondary_port = ServerStatus::ACTIVE;
-            primary_status = ServerStatus::INACTIVE;
-        }
+    std::chrono::system_clock::time_point primary_last;
+    std::chrono::system_clock::time_point secondary_last;
+
+    ServerEntry(std::string s, std::string hname, std::string server_port, ServerType t): sid(s), hostname(hname) { 
+        update_entry(server_port, t);
     }
-    void update_entry(std::string port, ServerType type) {
-        // Add the entry corresponding to the type, set status to active
-        if (type == ServerType::PRIMARY) {
+    void update_entry(std::string port, ServerType t) {
+        // Default to primary being active
+        if (t == ServerType::PRIMARY) {
+
+            if (secondary_status == ServerStatus::ACTIVE) {
+                std::cout <<
+                    "------- WARNING -------\n"
+                    "Primary is coming online after secondary was already promoted.\n"
+                    "This is currently unsupported and may cause undefined behavior\n"
+                    "such as missed messages served by secondary. This can be rectified\n"
+                    "by adding datastore copy methods which pull updates from secondary's\n"
+                    "file system...\n"
+                    "-----------------------\n";
+            }
+
             primary_port = port;
             primary_status = ServerStatus::ACTIVE;
+            primary_last = std::chrono::high_resolution_clock::now();
         } else {
             secondary_port = port;
+            secondary_last = std::chrono::high_resolution_clock::now();
+        }
+    }
+    void set_active(ServerType t) {
+        if (t == ServerType::PRIMARY) {
+            primary_status = ServerStatus::ACTIVE;
+        } else {
             secondary_status = ServerStatus::ACTIVE;
         }
     }
     bool operator==(const ServerEntry& e1) const {
         return sid == e1.sid;
     }
-    // bool is_serving_user_from_vec(const std::vector<std::string>& v) const { // ---(!) DEPRECATED
-    //     for (const std::string& s: v) {
-    //         if (clients_served.find(s) != clients_served.end()) {
-    //             return true;
-    //         }
-    //     }
-    //     return false;
-    // }
-    // bool is_serving(const std::string& user) {
-    //     return (std::find(clients_served.begin(), clients_served.end(), user) != clients_served.end());
-    // }
-    // bool is_serving_user(const std::string& user) {
-    //     // return (clients_served.)
-    //     return (clients_served.find(user) != clients_served.end());
-    // }
+    void promote_secondary() {
+        // * Mark prim as inactive and secondary as active
+        primary_status = ServerStatus::INACTIVE;
+        secondary_status = ServerStatus::ACTIVE;
+    }
+    void heartbeat_timestamp(const std::string& type_str) {
+        if (type_str == "primary") {
+            primary_last = std::chrono::high_resolution_clock::now();
+        } else {
+            secondary_last = std::chrono::high_resolution_clock::now();
+        }
+    }
 };
 
 // For client routing table - this could be consolidated w/ server routing table, but this
@@ -137,8 +150,13 @@ struct ClientEntry {
     ClientEntry(std::string client_id, std::string server_id) : cid(client_id), sid(server_id) { 
         followers.push_back(cid);
     }
-    bool has_forwards() {
+    bool has_forwards() const {
         return !forwards.empty();
+    }
+    std::string pop_next_forward() {
+        std::string fwd = forwards.front();
+        forwards.pop();
+        return fwd;
     }
 };
 

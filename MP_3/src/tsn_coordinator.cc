@@ -1,5 +1,6 @@
 /* ------- coordinator ------- */
 #include <vector>
+#include <thread>
 #include <grpc++/grpc++.h>
 #include "sns.grpc.pb.h"
 #include "tsn_coordinator.h"
@@ -17,12 +18,14 @@ using csce438::Registration;
 using csce438::GlobalUsers;
 using csce438::FlaggedDataEntry;
 using csce438::Forward;
+using csce438::Beat;
 using csce438::SNSCoordinatorService;
 
 // Userful for debugging, ex: if 2 we only assign users to sid=[1|2]
 // but other servers can still be registered and exist
 #define N_SERVERS       (2)
 #define DEFAULT_HOST    (std::string("0.0.0.0"))
+#define HRTBT_FREQ      (5000)
 
 class SNSCoordinatorServiceImpl final : public SNSCoordinatorService::Service {
 private:
@@ -46,14 +49,12 @@ public:
         // * Check if the sid exists in server_routing_table
         ServerEntry* serv_entry = get_server_entry(reg->sid());
         ServerType serv_type = parse_type(reg->type());
-
-        // * If so, add this server to that one's entry (overwrite primary, append secondary)
+        
         if (serv_entry != nullptr) {
+            // * Server exists, add this server to that one's entry (overwrite primary, append secondary)
             serv_entry->update_entry(reg->port(), serv_type);
-        }
-
-        // * If not, make a new entry
-        else {
+        } else {
+            // * This is a new server
             ServerEntry s_entry(reg->sid(), reg->hostname(), reg->port(), serv_type);
             server_routing_table.push_back(s_entry);
         }
@@ -86,6 +87,62 @@ public:
         repl->set_msg("200");
         return Status::OK;
     }
+    Status Heartbeat(ServerContext* ctx, const Beat* inbound, Beat* outbound) override {
+            
+        // (!)-------------------------------------------------(!)
+        std::cout << "heartbeat recv from sid=" << inbound->sid() << ":" << inbound->server_type() << " \n";
+        // (!)-------------------------------------------------(!)
+
+        std::chrono::duration<double, std::milli> prim_ms_duration;
+        std::chrono::duration<double, std::milli> secd_ms_duration;
+        std::chrono::system_clock::time_point recv_time = std::chrono::high_resolution_clock::now();
+
+        // std::string this_sid = inbound->sid();
+        std::string this_type = inbound->server_type();
+
+        ServerEntry* serv_entry = get_server_entry(inbound->sid());
+        prim_ms_duration = recv_time - serv_entry->primary_last;
+        secd_ms_duration = recv_time - serv_entry->secondary_last;
+
+        bool prim_fault = prim_ms_duration.count() > (HRTBT_FREQ * 2);
+        bool secd_fault = secd_ms_duration.count() > (HRTBT_FREQ * 2);
+
+        // (!)-------------------------------------------------(!)
+        if (prim_fault && secd_fault) {
+            std::cout <<    "Something went wrong, both servers offline\n"
+                            "please ensure you have spun up a secondary\n"
+                            "server before faulting the first.\n";
+            
+            
+        }
+        // (!)-------------------------------------------------(!)
+
+        // * If primary has exceeded our duration+window, we need to promote
+        //   the secondary for this cluster
+        if(prim_fault) {
+            std::cout << "primary has faulted! t=" << prim_ms_duration.count() << "ms\n";//(!)
+            serv_entry->promote_secondary();
+        }
+
+        // * If the primary came back online, we could demote secondary as well
+        // if(secd_fault && serv_entry->primary_status == ServerStatus::ACTIVE) {
+        //     serv_entry->demote_secondary();
+        // }
+
+        // * Respond with the SID and the active server
+        outbound->set_sid(inbound->sid());
+        std::string s_active = "primary";
+        if (prim_fault) {
+            s_active = "secondary";
+        }
+
+        outbound->set_server_type(s_active);
+
+        // * Set previously recv'd times here
+        serv_entry->heartbeat_timestamp(this_type);
+
+        return Status::OK;
+    }
     
     /* --- Client -------------------------------------- */
     Status FetchAssignment(ServerContext* ctx, const Request* req, Assignment* assigned) override {
@@ -103,7 +160,7 @@ public:
         int cid_int = std::stoi(req->username());
         std::string target_sid = std::to_string((cid_int % N_SERVERS) + 1);
 
-        std::cout << "Fetching assignment for\ncid=" << cid_int << "\ntarget_sid=" << target_sid << '\n';//(!)
+        std::cout << "Assigning cid=" << cid_int << ", sid=" << target_sid << '\n';//(!)
 
         ServerEntry* serv_entry = get_server_entry(target_sid);
 
@@ -118,17 +175,22 @@ public:
             return Status::OK;
         }
 
-        // * Add CID->ClusterID to global client_routing table, constructor adds client
-        //   to it's own followers
-        ClientEntry client_entry(cid_str, target_sid);
+        //////////////////////////////////////
+        // * Check if client in table
+        ClientEntry* cptr = get_client_entry(cid_str);
+        if (cptr == nullptr) {
+            // * Add CID->ClusterID to global client_routing table, constructor adds client
+            //   to it's own followers
+            ClientEntry client_entry(cid_str, target_sid);
+            client_routing_table.push_back(client_entry);
+        } else {
+            cptr->sid = target_sid;
+        }
+        //////////////////////////////////////
 
-        client_routing_table.push_back(client_entry);
-
-        std::cout << "Server assigned for\ncid=" << cid_int << "\nsid=" << target_sid <<'\n';//(!)
         assigned->set_sid(serv_entry->sid);
         assigned->set_hostname(serv_entry->hostname);
 
-        /* RE(!) REFACTOR ON FAULT TOLERANCE STEP RE(!)*/
         // * If primary is active, assign to that, else secondary
         if (serv_entry->primary_status == ServerStatus::ACTIVE) {
             assigned->set_port(serv_entry->primary_port);
@@ -163,11 +225,11 @@ public:
 	Status FetchGlobalClients(ServerContext* ctx, const Request* req, GlobalUsers* glob) override{
                 
         //(!)-------------------------------------------------(!)
-        std::cout << "FetchGlobalClients from cid=" << req->username();
-        if (req->arguments_size() > 0) {
-            std::cout << " origin=" << req->arguments(0);
-        }
-        std::cout << "\n";
+        // std::cout << "FetchGlobalClients from cid=" << req->username();
+        // if (req->arguments_size() > 0) {
+        //     std::cout << " origin=" << req->arguments(0);
+        // }
+        // std::cout << "\n";
         //(!)-------------------------------------------------(!)
 
 
@@ -185,16 +247,16 @@ public:
     Status FetchFollowers(ServerContext* ctx, const Request* req, Reply* repl) override{
 
         //(!)-------------------------------------------------(!)
-        std::cout << "FetchFollowers for cid=" << req->username();
-        if (req->arguments_size() > 0) {
-            std::cout << " origin=" << req->arguments(0);
-        }
-        std::cout << "\n";
+        // std::cout << "FetchFollowers for cid=" << req->username();
+        // if (req->arguments_size() > 0) {
+        //     std::cout << " origin=" << req->arguments(0);
+        // }
+        // std::cout << "\n";
         //(!)-------------------------------------------------(!)
 
         ClientEntry* cli_entry = get_client_entry(req->username());
         if (cli_entry == nullptr) {
-            std::cout << "ERR RPC FETCHFOLLOWERS UNREGISTERED USER\n";//(!)
+            std::cout << "ERR RPC FETCHFOLLOWERS UNREGISTERED USER for cid=" << req->username() << "\n";//(!)
             return Status::OK;
         }
         for (const std::string& u: cli_entry->followers) {
@@ -204,20 +266,6 @@ public:
         return Status::OK;
     }
 	
-    // Send message forwards from Coord to SyncService; Returns stream of messages
-    /*RE(!)
-
-        Inbound:
-        Read in Forward{ followers_of_user | sent_message }
-        for each follower_cid in followers_of_user:
-            add sent_message to ClientEntry[follower_cid]
-
-        
-        Outbound:
-        for each served_cid in ServerEntry[SyncService.sid].clients_served
-            if ClientEntry[served_cid] has forwards:
-                send Forward{ served_cid | sent_message }
-    */ 
     Status ForwardEntryStream (ServerContext* ctx, ServerReaderWriter<Forward, Forward>* stream) override {
         // * Parse stream init message which ensures order and gives us SyncService.sid
         std::string sync_sid;
@@ -243,23 +291,32 @@ public:
         // * Read in Forward{ followers_of_user | sent_message }
         Forward inbound_fwd;
         while(stream->Read(&inbound_fwd)) {
+            
             // * for each follower_cid in followers_of_user:
             std::string fwd_entry = inbound_fwd.entry();
             for (int i = 0; i < inbound_fwd.cid_size(); ++i) {
-                std::string follower_cid = inbound_fwd.cid(0);
+                std::string follower_cid = inbound_fwd.cid(i);
+            
                 // * add sent_message to ClientEntry[follower_cid]
                 ClientEntry* cli_entry = get_client_entry(follower_cid);
+                if (cli_entry == nullptr) {
+                    std::cout << "Could not get_client_entry for stream->Read\n\n";//(!)
+                }
                 cli_entry->forwards.push(fwd_entry);
 
 
                 //(!)-------------------------------------------------(!)
                 std::cout << "Got forward: " << fwd_entry << "\n";
-                std::cout << "Giving it to cid=" << cli_entry->cid << "\n\n";
+                std::cout << "forwarding to cid=" << cli_entry->cid << "\n\n";
+                std::cout << "cid=" << cli_entry->cid << " has followers:\n";
+                for (const auto& f: cli_entry->followers) {
+                    std::cout << f << "\n";
+                }
+                std::cout << "\n";
                 //(!)-------------------------------------------------(!)
 
             }
         }
-
         
         /*
         ------- Handle outbound forwards ---------------------
@@ -270,103 +327,38 @@ public:
             (!) add a has_forwards to clients_served to save on indirection cost
 
         */
-        // * For each clients_served
-        ServerEntry* sync_serv_entry = get_server_entry(sync_sid);
-        for (const std::string& recvr_cid: sync_serv_entry->clients_served) {
 
-            // * Get client entry and check if they have forwards
-            ClientEntry* cli_entry = get_client_entry(recvr_cid);
-            if (cli_entry == nullptr) {
-                std::cout << "ERR OUTBOUND FORWARDS NO CLIENT FOR cid=" << recvr_cid << '\n';//(!)
-                std::cout << "CANCELLING STREAM\n";//(!)
-                return Status::CANCELLED;//(!)
+        // Looping this way ensures we only iterate over each client once, which may not
+        // seem efficient, but otherwise we would have to fetch them each time
+
+        // * For each client
+        for (ClientEntry& recvr_entry: client_routing_table) {
+            // * If client is not on sync_serv_sid, or has no forwards, skip
+            if (recvr_entry.sid != sync_sid || !recvr_entry.has_forwards()) {
+                continue;
             }
 
-            // * If so, write those to SyncService
-            Forward outbound_fwd;
-            outbound_fwd.add_cid(recvr_cid);
-            while(cli_entry->has_forwards()) {
+            // (!)------------------------------------------(!)
+            std::cout << "Client on sid=" << sync_sid << " has forwards:\n";
+            std::queue<std::string> fwd_cpy(recvr_entry.forwards);
+            while (!fwd_cpy.empty()) {
+                std::cout << fwd_cpy.front() << "\n";
+                fwd_cpy.pop();
+            }
+            std::cout << "---\n";
+            // (!)------------------------------------------(!)
 
-                //(!)-------------------------------------------------(!)
-                std::cout << recvr_cid << ".forwards.size=" << cli_entry->forwards.size() << "\n";
-                //(!)-------------------------------------------------(!)
-
-                outbound_fwd.set_entry(cli_entry->forwards.front());
-
-                //(!)-------------------------------------------------(!)
-                std::cout << "Have outbound forward from cid=" << cli_entry->cid << "\n";
-                std::cout << "Forwarding message: " << cli_entry->forwards.front() << "\n";
-                //(!)-------------------------------------------------(!)
-
-                cli_entry->forwards.pop();
+            // * Client is served by this cluster, and has forwards, send them
+            while(!recvr_entry.forwards.empty()) {
+                Forward outbound_fwd;
+                outbound_fwd.add_cid(recvr_entry.cid);
+                std::string entry = recvr_entry.pop_next_forward();
+                outbound_fwd.set_entry(entry);
                 stream->Write(outbound_fwd);
             }
         }
-
         return Status::OK;        
     }
-    // >>>(!)
-    // Status ForwardEntryStream (ServerContext* ctx, ServerReaderWriter<FlaggedDataEntry, FlaggedDataEntry>* stream) override {
-    //     /*
-    //         Forwards are not necessarily ordered by Incoming, Outbound on the SyncService side, this is ok
-    //         as long as we ensure the first FlaggedDataEntry= { "SYNCINIT", sid }
-    //     */
-
-    //     // --- Incoming forwards ---v
-    //     // * Recv msg from SyncService to init stream, extract SyncService.sid and get ServerEntry
-    //     std::string sync_sid;
-    //     ServerEntry* sync_serv_entry;
-    //     FlaggedDataEntry init_msg;
-    //     stream->Read(&init_msg);
-    //     if (init_msg.cid() == "SYNCINIT") { // (!) good
-    //         sync_sid = init_msg.entry();
-    //         sync_serv_entry = get_server_entry(sync_sid);
-    //     } else { // (!) bad - should never happen
-    //         std::cout << "ERR UNORDERED INIT MESSAGE ON FORWARDENTRYSTREAM\n\n";
-    //     }
-
-    //     // * For each msg forward from sync service
-    //     FlaggedDataEntry inbound_fwd;
-    //     while (stream->Read(&inbound_fwd)) {
-    //         // ex: { "222", "1|:|TIME|:|222|:|Hello, it's me!"" }
-    //         // -> originates from SID serving 222
-    //         // -> Should be propogated to all SIDs serving a client following 222
-
-    //         /// <<<------- Untested thusfar(!)
-    //         // * Get sender entry so we can access their followers
-    //         ClientEntry* sender_entry = get_client_entry(inbound_fwd.cid());
-    //         if (sender_entry == nullptr) { //(!) bad - should never happen
-    //             std::cout << "ERR RECVD UNREGISTERED CLIENT FORWARD FORWARDENTRYSTREAM cid=" << inbound_fwd.cid() << '\n';//(!)
-    //         }
-            
-    //         // * Find all servers where there is an intersection of sender.followers and server.clients_served
-    //         //   Iterate over server entries, if they serve a follower of sender, add this entry to their forwards
-    //         for (ServerEntry& s: server_routing_table) {
-    //             // Skip entry for SyncService server_entry
-    //             if (s == *sync_serv_entry) {
-    //                 continue;
-    //             }
-    //             // * Check if this server serves a follower of the sender, if so add to foward queue
-    //             if (s.is_serving_user_from_vec(sender_entry->followers)) {
-    //                 s.forward_queue.push(inbound_fwd);
-    //             }
-    //         }
-    //         /// >>>------- Untested thusfar
-    //     }
-        
-    //     // --- Outbound forwards ---v
-    //     // * While ServerEntry::sid==SyncService.sid forward_queue is not empty, send FlaggedDataEntry
-    //     // (!) this may be expensive indirection, expensive enough to just copy the queue and clear it in
-    //     //     the server entry
-    //     while (!sync_serv_entry->forward_queue.empty()) {
-    //         stream->Write(sync_serv_entry->forward_queue.front());
-    //         sync_serv_entry->forward_queue.pop();
-    //     }
-
-    //     // * Stop sending, let SyncService close stream
-    //     return Status::OK;
-    // }
-    //<<<(!)
 };
 // RE(!) Could change these to auto for loops, but idk what ownership
 //       principles look like for those...
@@ -424,9 +416,12 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // (!)(!)
-    std::cout << "\nWARNING: Is ./datastore/* clear??\n\n";// (!)(!)
-    // (!)(!)
+    // (!)----------------------------------------------------------(!)
+    std::cout << "-------------------------------------------------\n";
+    std::cout << "New coordinator is online, clearing datastore...\n";
+    std::cout << "-------------------------------------------------\n";
+    std::system("rm -r ./datastore/*");//(!)(!)(!)(!)(!)(!)(!)(!)(!)(!)
+    // (!)----------------------------------------------------------(!)
 
     std::string port = "3010";
     int opt = 0;
