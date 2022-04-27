@@ -3,6 +3,10 @@
 ## Compilation & Use
 This project is intended for deployment on an amazonlinux environment with Google's gRPC and Protocol Buffers installed. We're using Docker to build/deploy this environment which allows arbitrary resource allocation and platform independance in development, but use with Amazon's Cloud9 is also supported.
 
+### Note
+During this assignment, I changed the way I used Docker images and managed project files with VSCode. Check out this repo for details on that:
+https://github.com/gkweston/CSCE438-DockerEnvironment
+
 ### Building Docker image
 
 After ensuring Docker is properly installed, navigate to your `$WORKING_DIR`, `git clone` these files, then run:
